@@ -131,9 +131,8 @@ static void pcfFlush() {
 static void setMosfet(uint8_t ch, bool on) {
     if (ch > 3) return;
     const uint8_t p0[4] = { MOSFET_CH0_P0, MOSFET_CH1_P0, MOSFET_CH2_P0, MOSFET_CH3_P0 };
-    const uint8_t p1[4] = { 0x00, 0x00, 0x00, MOSFET_CH3_P1 };
-    if (on) { g_pcf_p0 |=  p0[ch]; g_pcf_p1 |=  p1[ch]; }
-    else    { g_pcf_p0 &= ~p0[ch]; g_pcf_p1 &= ~p1[ch]; }
+    if (on) g_pcf_p0 |=  p0[ch];
+    else    g_pcf_p0 &= ~p0[ch];
     g_mosfet[ch] = on;
     pcfFlush();
 }
