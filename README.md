@@ -92,7 +92,7 @@ Displays live readings from the KCS208 PID heater controller.
 
 ### MOSFET Switches — PCF8575
 
-Four independently controlled output channels, each driving a MOSFET valve or actuator.
+Eight independently controlled output channels across two boards, each driving a MOSFET valve or actuator.
 
 - Toggle the switch next to each channel to turn it on or off.
 - The state shown reflects what the ESP32 last reported — it updates automatically on each data packet.
@@ -101,8 +101,12 @@ Four independently controlled output channels, each driving a MOSFET valve or ac
 |---------|-------|
 | CH0 | Board 1 |
 | CH1 | Board 1 |
-| CH2 | Board 2 |
-| CH3 | Board 2 |
+| CH2 | Board 1 |
+| CH3 | Board 1 |
+| CH4 | Board 2 |
+| CH5 | Board 2 |
+| CH6 | Board 2 |
+| CH7 | Board 2 |
 
 ---
 
@@ -126,25 +130,26 @@ Up to 8 PT1000 resistance temperature detectors across two boards (4 per board).
 
 ## Updating ESP32 Firmware
 
-You can flash new firmware directly from the dashboard over the existing USB connection — no Arduino IDE or PlatformIO required on the user's machine.
+You can flash new firmware directly from the dashboard over the existing USB connection — no Arduino IDE or PlatformIO required.
 
-### Getting the firmware file
+### Option A — Flash from GitHub Release (recommended)
 
-In PlatformIO, build your project and locate the compiled binary:
-
-```
-.pio/build/<env>/firmware.bin
-```
-
-### Flashing
+When a new release is available, the **Firmware Update** card shows a **Flash from Release** button.
 
 1. Connect to the ESP32 using the **Serial Connection** controls.
-2. Scroll to the **Firmware Update** card.
-3. Drag and drop the `firmware.bin` file onto the upload zone, or click to browse.
+2. Click **Flash from Release** — the dashboard downloads `firmware.bin` from the latest GitHub release and flashes it automatically.
+
+The firmware version shown in the header updates after the ESP32 reboots.
+
+### Option B — Manual upload
+
+1. Obtain a `firmware.bin` file (e.g. from PlatformIO: `.pio/build/<env>/firmware.bin`).
+2. Connect to the ESP32 using the **Serial Connection** controls.
+3. Drag and drop the `.bin` file onto the upload zone in the **Firmware Update** card, or click to browse.
 4. Leave **Flash Address** as `0x10000` (standard PlatformIO app address).
 5. Click **Flash Firmware**.
 
-The log area shows real-time esptool output. The ESP32 reboots automatically when flashing is complete and the dashboard reconnects.
+The log area shows real-time esptool output. The ESP32 reboots automatically when flashing is complete.
 
 > **Do not close the dashboard or unplug the USB cable during flashing.**
 
@@ -152,7 +157,7 @@ The log area shows real-time esptool output. The ESP32 reboots automatically whe
 
 ## Sharing on a Local Network
 
-Other devices on the same WiFi network can view the dashboard (read-only) at the address shown in the WiFi card, e.g.:
+Other devices on the same WiFi network can view the dashboard (read-only) at the LAN address shown in the header, e.g.:
 
 ```
 http://192.168.1.45:8080
