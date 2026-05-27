@@ -10,7 +10,7 @@
 #include "kcs208.h"
 
 // ── Version ───────────────────────────────────────────────────────────────────
-#define FW_VERSION      "1.0.0"
+#define FW_VERSION      "1.1.0"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 #define TELEMETRY_MS    2000
@@ -26,7 +26,7 @@ static float    g_sht_h[8]   = {};
 static float    g_pt_t[4]    = {};
 static float    g_batt_v     = 0.0f;
 static float    g_batt_soc   = 0.0f;
-static bool     g_mosfet[4]  = {};
+static bool     g_mosfet[8]  = {};
 static int16_t  g_kcs_pv     = 0;
 static int16_t  g_kcs_sv     = 0;
 static uint16_t g_kcs_mv     = 0;
@@ -132,10 +132,19 @@ static void pcfFlush() {
 }
 
 static void setMosfet(uint8_t ch, bool on) {
-    if (ch > 3) return;
-    const uint8_t p0[4] = { MOSFET_CH0_P0, MOSFET_CH1_P0, MOSFET_CH2_P0, MOSFET_CH3_P0 };
-    if (on) g_pcf_p0 |=  p0[ch];
-    else    g_pcf_p0 &= ~p0[ch];
+    if (ch > 7) return;
+    struct { uint8_t *port; uint8_t mask; } lut[8] = {
+        { &g_pcf_p0, MOSFET_CH0_P0 },
+        { &g_pcf_p0, MOSFET_CH1_P0 },
+        { &g_pcf_p0, MOSFET_CH2_P0 },
+        { &g_pcf_p0, MOSFET_CH3_P0 },
+        { &g_pcf_p0, MOSFET_CH4_P0 },
+        { &g_pcf_p0, MOSFET_CH5_P0 },
+        { &g_pcf_p0, MOSFET_CH6_P0 },
+        { &g_pcf_p1, MOSFET_CH7_P1 },
+    };
+    if (on) *lut[ch].port |=  lut[ch].mask;
+    else    *lut[ch].port &= ~lut[ch].mask;
     g_mosfet[ch] = on;
     pcfFlush();
 }
@@ -253,7 +262,7 @@ static void sdLogStart(const char *name = nullptr) {
     for (uint8_t i = 0; i < 8; i++) g_sdFile.printf(",sht%d_t", i);
     for (uint8_t i = 0; i < 8; i++) g_sdFile.printf(",sht%d_h", i);
     for (uint8_t i = 0; i < 4; i++) g_sdFile.printf(",pt%d_t",  i);
-    g_sdFile.print(",batt_v,batt_soc,mosfet0,mosfet1,mosfet2,mosfet3");
+    g_sdFile.print(",batt_v,batt_soc,mosfet0,mosfet1,mosfet2,mosfet3,mosfet4,mosfet5,mosfet6,mosfet7");
     g_sdFile.println(",kcs_pv,kcs_sv,kcs_mv,kcs_run");
     g_sdFile.flush();
     g_sdLogging = true;
@@ -273,7 +282,7 @@ static void sdLogRow() {
     for (uint8_t i = 0; i < 8; i++) g_sdFile.printf(",%.1f", g_sht_h[i]);
     for (uint8_t i = 0; i < 4; i++) g_sdFile.printf(",%.1f", g_pt_t[i]);
     g_sdFile.printf(",%.3f,%.1f", g_batt_v, g_batt_soc);
-    for (uint8_t i = 0; i < 4; i++) g_sdFile.printf(",%d", g_mosfet[i] ? 1 : 0);
+    for (uint8_t i = 0; i < 8; i++) g_sdFile.printf(",%d", g_mosfet[i] ? 1 : 0);
     g_sdFile.printf(",%d,%d,%d,%d\n", g_kcs_pv, g_kcs_sv, g_kcs_mv, g_kcs_run ? 1 : 0);
     g_sdFile.flush();
 }
@@ -298,7 +307,7 @@ static void emitTelemetry() {
     doc["batt"]["v"]   = roundf(g_batt_v   * 1000) / 1000.0f;
     doc["batt"]["soc"] = roundf(g_batt_soc * 10)   / 10.0f;
     JsonArray mos = doc["mosfet"].to<JsonArray>();
-    for (uint8_t i = 0; i < 4; i++) mos.add(g_mosfet[i]);
+    for (uint8_t i = 0; i < 8; i++) mos.add(g_mosfet[i]);
     doc["kcs208"]["pv"]     = g_kcs_pv;
     doc["kcs208"]["sv"]     = g_kcs_sv;
     doc["kcs208"]["mv"]     = g_kcs_mv;

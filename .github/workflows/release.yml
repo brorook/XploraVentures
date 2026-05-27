@@ -22,10 +22,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt platformio
 
       - name: Build executable
         run: pyinstaller XploraVentures.spec
+
+      - name: Build firmware
+        run: pio run -e esp32-s3-devkitc-1
 
       - name: Verify build
         run: |
@@ -33,10 +36,17 @@ jobs:
             Write-Error "Build failed — dist\XploraVentures.exe not found"
             exit 1
           }
-          Write-Host "Build OK: $((Get-Item dist\XploraVentures.exe).Length / 1MB) MB"
+          if (!(Test-Path ".pio\build\esp32-s3-devkitc-1\firmware.bin")) {
+            Write-Error "Firmware build failed — firmware.bin not found"
+            exit 1
+          }
+          Write-Host "Dashboard OK: $((Get-Item dist\XploraVentures.exe).Length / 1MB) MB"
+          Write-Host "Firmware OK: $((Get-Item .pio\build\esp32-s3-devkitc-1\firmware.bin).Length / 1KB) KB"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/XploraVentures.exe
+          files: |
+            dist/XploraVentures.exe
+            .pio/build/esp32-s3-devkitc-1/firmware.bin
           generate_release_notes: true

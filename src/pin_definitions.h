@@ -68,12 +68,16 @@
 // Port 0: P00–P07 (byte 0), Port 1: P10–P17 (byte 1)
 //
 // Each JP connects one Stack_Bot pin to one MOSFET gate (one bit per channel).
-// Board 1: JP1–JP4 closed → Stack_Bot_1–4 active (GPIO_P1–P4)
-// Board 2: JP5–JP8 closed → Stack_Bot_5–8 active (GPIO_P5–P7, P10)
-//   CH0 — GPIO_P1 (Stack_Bot_1)
-//   CH1 — GPIO_P2 (Stack_Bot_2)
-//   CH2 — GPIO_P3 (Stack_Bot_3)
-//   CH3 — GPIO_P4 (Stack_Bot_4)
+// Board 1: JP1–JP4 → GPIO_P1–P4   (CH0–CH3, Port 0)
+// Board 2: JP5–JP8 → GPIO_P5–P7, P10 (CH4–CH7, Port 0 × 3 + Port 1 × 1)
+//   CH0 — GPIO_P1  (Port 0, bit 1)
+//   CH1 — GPIO_P2  (Port 0, bit 2)
+//   CH2 — GPIO_P3  (Port 0, bit 3)
+//   CH3 — GPIO_P4  (Port 0, bit 4)
+//   CH4 — GPIO_P5  (Port 0, bit 5)
+//   CH5 — GPIO_P6  (Port 0, bit 6)
+//   CH6 — GPIO_P7  (Port 0, bit 7)
+//   CH7 — GPIO_P10 (Port 1, bit 0)
 // Power rails on J3: +24V (Bot_9–13), +5V (Bot_14–15), GND (Bot_16–20)
 // -----------------------------------------------------------------------------
 #define PCF8575_ADDR        0x20
@@ -82,6 +86,11 @@
 #define MOSFET_CH1_P0       0x04    // GPIO_P2 — Board 1, CH1
 #define MOSFET_CH2_P0       0x08    // GPIO_P3 — Board 1, CH2
 #define MOSFET_CH3_P0       0x10    // GPIO_P4 — Board 1, CH3
+#define MOSFET_CH4_P0       0x20    // GPIO_P5 — Board 2, CH4
+#define MOSFET_CH5_P0       0x40    // GPIO_P6 — Board 2, CH5
+#define MOSFET_CH6_P0       0x80    // GPIO_P7 — Board 2, CH6
+// Port 1 masks (byte 1 in Wire.write)
+#define MOSFET_CH7_P1       0x01    // GPIO_P10 — Board 2, CH7
 
 // -----------------------------------------------------------------------------
 // RS-485 Half-Duplex (Serial2)

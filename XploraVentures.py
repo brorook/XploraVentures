@@ -39,7 +39,7 @@ import serial.tools.list_ports
 from flask import Flask, jsonify, render_template_string, request, send_file
 from flask_socketio import SocketIO
 
-VERSION      = "1.0.0"
+VERSION      = "1.1.0"
 GITHUB_REPO  = "brorook/XploraVentures"
 
 app = Flask(__name__)
@@ -53,7 +53,8 @@ _log_active = False
 _log_path = None
 _log_fh = None
 _log_writer = None
-_update_info = None  # set by update-check thread if a newer release exists
+_update_info  = None  # set by update-check thread if a newer release exists
+_latest_release = None  # full latest release info (assets, tag, etc.)
 
 N_SHT = 16
 N_PT  = 8
@@ -273,6 +274,18 @@ button:disabled { opacity: .28; cursor: default; }
       <span class="card-title">Firmware Update</span>
       <span class="card-sub">ESP32 — via serial (USB)</span>
     </div>
+
+    <!-- GitHub release flash -->
+    <div id="github-flash-row" style="display:none;margin-bottom:16px">
+      <div class="section-label" style="margin-bottom:8px">From GitHub Release</div>
+      <div class="row" style="align-items:center">
+        <span id="github-fw-label" style="font-size:13px;color:var(--muted);flex:1"></span>
+        <button class="btn-primary" id="btn-flash-github">Flash from Release</button>
+      </div>
+    </div>
+
+    <!-- Manual upload flash -->
+    <div class="section-label" style="margin-bottom:8px">Manual Upload</div>
     <div class="row" style="margin-bottom:14px;align-items:flex-end">
       <div class="field" style="flex:1">
         <div class="flash-zone" id="flash-zone" onclick="document.getElementById('flash-file').click()">
@@ -284,8 +297,9 @@ button:disabled { opacity: .28; cursor: default; }
       <div class="field field-sm"><label>Flash Address</label><input type="text" id="flash-addr" value="0x10000" placeholder="0x10000"></div>
       <button class="btn-danger" id="btn-flash" disabled>Flash Firmware</button>
     </div>
+
     <div class="flash-log" id="flash-log"></div>
-    <p class="flash-warn">⚠ Flashing will briefly disconnect the ESP32. Do not close the dashboard during the process. Use the firmware.bin from PlatformIO's <em>.pio/build/&lt;env&gt;/</em> folder.</p>
+    <p class="flash-warn">⚠ Flashing will briefly disconnect the ESP32. Do not close the dashboard during the process.</p>
   </div>
 
   <!-- Logging + Heater Controller + MOSFET — all one row -->
@@ -408,12 +422,12 @@ for (let i = 0; i < N_PT; i++) {
 }
 
 const mosfetList = document.getElementById('mosfet-list');
-for (let i = 0; i < 4; i++) {
+for (let i = 0; i < 8; i++) {
   mosfetList.insertAdjacentHTML('beforeend', `
     <div class="mosfet-item">
       <div>
         <div class="mosfet-ch">CH${i}</div>
-        <div class="mosfet-board">Board ${i < 2 ? 1 : 2}</div>
+        <div class="mosfet-board">Board ${i < 4 ? 1 : 2}</div>
       </div>
       <label class="toggle">
         <input type="checkbox" id="mos-${i}" onchange="sendCmd({cmd:'mosfet',ch:${i},on:this.checked})">
@@ -677,8 +691,34 @@ socket.on('flash_log',  d => flashAppendLine(d.line));
 socket.on('flash_done', d => {
   flashAppendLine(d.msg, d.ok ? 'ok' : 'err');
   flashBtn.disabled = false;
+  document.getElementById('btn-flash-github').disabled = false;
   if (d.ok) { _flashFile = null; flashFileName.textContent = ''; flashFileInput.value = ''; }
 });
+
+// ── GitHub firmware flash ─────────────────────────────────────────────────────
+function applyReleaseInfo(d) {
+  if (!d || !d.fw_url) return;
+  const row   = document.getElementById('github-flash-row');
+  const label = document.getElementById('github-fw-label');
+  const size  = d.fw_size ? ` (${(d.fw_size / 1024).toFixed(0)} KB)` : '';
+  label.textContent = `firmware.bin — v${d.version}${size}`;
+  row.style.display = '';
+}
+
+socket.on('release_info', applyReleaseInfo);
+
+document.getElementById('btn-flash-github').onclick = () => {
+  const port = document.getElementById('sel-port').value;
+  if (!port) { toast('Select a port first', true); return; }
+  document.getElementById('flash-log').innerHTML = '';
+  document.getElementById('btn-flash-github').disabled = true;
+  fetch('/api/firmware/flash-github', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({port})
+  }).then(r => r.json()).then(r => {
+    if (!r.ok) { flashAppendLine('Error: ' + r.error, 'err'); document.getElementById('btn-flash-github').disabled = false; }
+  });
+};
 
 // ── Update notification ───────────────────────────────────────────────────────
 socket.on('update_available', d => {
@@ -690,7 +730,8 @@ socket.on('update_available', d => {
 
 // Check for an update that arrived before the socket connected (e.g. page refresh)
 fetch('/api/version').then(r => r.json()).then(d => {
-  if (d.update) socket.emit('update_available', d.update);
+  if (d.update)   socket.emit('update_available', d.update);
+  if (d.release)  applyReleaseInfo(d.release);
 });
 
 loadPorts();
@@ -770,7 +811,7 @@ def api_log_start():
         *[f'sht{i}_h'  for i in range(N_SHT)],
         *[f'pt{i}_t'   for i in range(N_PT)],
         'batt_v', 'batt_soc',
-        *[f'mosfet{i}' for i in range(4)],
+        *[f'mosfet{i}' for i in range(8)],
         'kcs_pv', 'kcs_sv', 'kcs_mv', 'kcs_run',
     ])
     _log_active = True
@@ -842,7 +883,7 @@ def _log_row(data):
         *[sht[i].get('h', '') if i < len(sht) else '' for i in range(N_SHT)],
         *[(lambda v: '' if v is None or v < -200 or v > 900 else v)(pt[i].get('t') if i < len(pt) else None) for i in range(N_PT)],
         batt.get('v', ''), batt.get('soc', ''),
-        *[mosfet[i] if i < len(mosfet) else '' for i in range(4)],
+        *[mosfet[i] if i < len(mosfet) else '' for i in range(8)],
         kcs.get('pv', ''), kcs.get('sv', ''), kcs.get('mv', ''), kcs.get('run', ''),
     ])
     _log_fh.flush()
@@ -935,9 +976,9 @@ def _parse_version(tag: str):
 
 
 def _check_for_update():
-    """Background thread: polls GitHub releases once, notifies clients if newer."""
-    global _update_info
-    time.sleep(5)  # let the server finish starting up first
+    """Background thread: polls GitHub releases once, notifies clients of updates."""
+    global _update_info, _latest_release
+    time.sleep(5)
     url = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'XploraVentures'})
@@ -946,22 +987,57 @@ def _check_for_update():
         latest_tag = data.get('tag_name', '')
         if not latest_tag:
             return
+        assets = data.get('assets', [])
+        exe_url = next((a['browser_download_url'] for a in assets if a['name'].endswith('.exe')), data.get('html_url', ''))
+        fw_url  = next((a['browser_download_url'] for a in assets if a['name'] == 'firmware.bin'), None)
+        fw_size = next((a['size'] for a in assets if a['name'] == 'firmware.bin'), None)
+
+        _latest_release = {
+            'version': latest_tag.lstrip('v'),
+            'url':     exe_url,
+            'fw_url':  fw_url,
+            'fw_size': fw_size,
+        }
+        socketio.emit('release_info', _latest_release)
+
         if _parse_version(latest_tag) > _parse_version(VERSION):
-            asset_url = next(
-                (a['browser_download_url'] for a in data.get('assets', [])
-                 if a['name'].endswith('.exe')),
-                data.get('html_url', '')
-            )
-            _update_info = {'version': latest_tag.lstrip('v'), 'url': asset_url}
+            _update_info = _latest_release
             socketio.emit('update_available', _update_info)
-            print(f'  [update] New version {latest_tag} available: {asset_url}')
+            print(f'  [update] New version {latest_tag} available')
+        else:
+            print(f'  [update] Up to date ({latest_tag}), firmware.bin {"found" if fw_url else "not in release"}')
     except Exception as e:
         print(f'  [update] Check failed: {e}')
 
 
 @app.route('/api/version')
 def api_version():
-    return jsonify({'version': VERSION, 'update': _update_info})
+    return jsonify({'version': VERSION, 'update': _update_info, 'release': _latest_release})
+
+
+@app.route('/api/firmware/flash-github', methods=['POST'])
+def api_firmware_flash_github():
+    port = request.get_json().get('port', '').strip()
+    if not port:
+        return jsonify({'ok': False, 'error': 'No port selected'})
+    if not _latest_release or not _latest_release.get('fw_url'):
+        return jsonify({'ok': False, 'error': 'No firmware.bin in latest release'})
+
+    def _download_and_flash():
+        try:
+            socketio.emit('flash_log', {'line': f'— Downloading firmware v{_latest_release["version"]} from GitHub…'})
+            req = urllib.request.Request(_latest_release['fw_url'], headers={'User-Agent': 'XploraVentures'})
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.bin')
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                tmp.write(resp.read())
+            tmp.close()
+            socketio.emit('flash_log', {'line': f'— Download complete ({os.path.getsize(tmp.name) // 1024} KB)'})
+            _flash_firmware(port, tmp.name, '0x10000')
+        except Exception as e:
+            socketio.emit('flash_done', {'ok': False, 'msg': f'Download failed: {e}'})
+
+    threading.Thread(target=_download_and_flash, daemon=True).start()
+    return jsonify({'ok': True})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
