@@ -39,7 +39,7 @@ import serial.tools.list_ports
 from flask import Flask, jsonify, render_template_string, request, send_file
 from flask_socketio import SocketIO
 
-VERSION      = "1.1.0"
+VERSION      = "1.1.1"
 GITHUB_REPO  = "brorook/XploraVentures"
 
 app = Flask(__name__)
@@ -929,7 +929,7 @@ def _flash_firmware(port, bin_path, addr):
                 esptool.main([
                     '--port', port,
                     '--baud', '460800',
-                    '--chip', 'esp32',
+                    '--chip', 'esp32s3',
                     'write_flash', '-z', addr, bin_path,
                 ])
             except SystemExit as e:
