@@ -9,6 +9,9 @@
 #include "pin_definitions.h"
 #include "kcs208.h"
 
+// ── Version ───────────────────────────────────────────────────────────────────
+#define FW_VERSION      "1.0.0"
+
 // ── Timing ────────────────────────────────────────────────────────────────────
 #define TELEMETRY_MS    2000
 #define KCS208_MS       5000
@@ -304,6 +307,7 @@ static void emitTelemetry() {
 
     doc["sd"]["present"] = (digitalRead(SD_DETECT) == LOW);
     doc["sd"]["logging"] = g_sdLogging;
+    doc["fw"]            = FW_VERSION;
 
     serializeJson(doc, Serial);
     Serial.print('\n');

@@ -1,0 +1,42 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build executable
+        run: pyinstaller XploraVentures.spec
+
+      - name: Verify build
+        run: |
+          if (!(Test-Path "dist\XploraVentures.exe")) {
+            Write-Error "Build failed — dist\XploraVentures.exe not found"
+            exit 1
+          }
+          Write-Host "Build OK: $((Get-Item dist\XploraVentures.exe).Length / 1MB) MB"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/XploraVentures.exe
+          generate_release_notes: true
