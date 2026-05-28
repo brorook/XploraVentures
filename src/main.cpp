@@ -18,7 +18,7 @@
 
 // ── PT1000 config ─────────────────────────────────────────────────────────────
 #define PT1000_R_NOM    1000.0f
-#define PT1000_R_REF    4300.0f  // verify against MAX31865 board reference resistor
+#define PT1000_R_REF    4000.0f  // verify against MAX31865 board reference resistor
 
 // ── Sensor state ──────────────────────────────────────────────────────────────
 static float    g_sht_t[8]   = {};
@@ -45,10 +45,10 @@ static File  g_sdFile;
 static String g_rxBuf;
 
 static Adafruit_MAX31865 g_pt[4] = {
-    Adafruit_MAX31865(PT1000_B1_CH1_CS, SPI_MOSI, SPI_MISO, SPI_SCK),
-    Adafruit_MAX31865(PT1000_B1_CH2_CS, SPI_MOSI, SPI_MISO, SPI_SCK),
-    Adafruit_MAX31865(PT1000_B2_CH1_CS, SPI_MOSI, SPI_MISO, SPI_SCK),
-    Adafruit_MAX31865(PT1000_B2_CH2_CS, SPI_MOSI, SPI_MISO, SPI_SCK),
+    Adafruit_MAX31865(PT1000_B1_CH1_CS, &SPI),
+    Adafruit_MAX31865(PT1000_B1_CH2_CS, &SPI),
+    Adafruit_MAX31865(PT1000_B2_CH1_CS, &SPI),
+    Adafruit_MAX31865(PT1000_B2_CH2_CS, &SPI),
 };
 
 // =============================================================================
@@ -224,7 +224,6 @@ static void connectWiFi(const char *ssid, const char *pass) {
 
 static bool sdInit() {
     if (digitalRead(SD_DETECT) != LOW) return false;   // no card
-    SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     return SD.begin(SD_CS, SPI, 4000000);
 }
 
@@ -371,6 +370,7 @@ void setup() {
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
 
+    SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     for (auto &p : g_pt) p.begin(MAX31865_3WIRE);  // adjust: 2WIRE / 3WIRE / 4WIRE
 
     pinMode(RS485_DIR, OUTPUT);
