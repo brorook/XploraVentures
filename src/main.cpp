@@ -24,6 +24,7 @@
 static float    g_sht_t[8]   = {};
 static float    g_sht_h[8]   = {};
 static float    g_pt_t[4]    = {};
+static uint8_t  g_pt_fault[4] = {};
 static float    g_batt_v     = 0.0f;
 static float    g_batt_soc   = 0.0f;
 static bool     g_mosfet[8]  = {};
@@ -98,8 +99,11 @@ static void readAllSHT45() {
 // =============================================================================
 
 static void readAllPT1000() {
-    for (uint8_t i = 0; i < 4; i++)
+    for (uint8_t i = 0; i < 4; i++) {
+        g_pt_fault[i] = g_pt[i].readFault();
+        if (g_pt_fault[i]) g_pt[i].clearFault();
         g_pt_t[i] = g_pt[i].temperature(PT1000_R_NOM, PT1000_R_REF);
+    }
 }
 
 // =============================================================================
@@ -302,7 +306,9 @@ static void emitTelemetry() {
     }
     JsonArray pt = doc["pt1000"].to<JsonArray>();
     for (uint8_t i = 0; i < 4; i++) {
-        pt.add<JsonObject>()["t"] = roundf(g_pt_t[i] * 10) / 10.0f;
+        JsonObject p = pt.add<JsonObject>();
+        p["t"] = roundf(g_pt_t[i] * 10) / 10.0f;
+        if (g_pt_fault[i]) p["fault"] = g_pt_fault[i];
     }
     doc["batt"]["v"]   = roundf(g_batt_v   * 1000) / 1000.0f;
     doc["batt"]["soc"] = roundf(g_batt_soc * 10)   / 10.0f;
