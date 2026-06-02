@@ -192,6 +192,34 @@ button:disabled { opacity: .28; cursor: default; }
 
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
 
+/* ── Tabs ── */
+.tab-bar { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 28px; }
+.tab-btn { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 12px 18px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; margin-bottom: -1px; white-space: nowrap; }
+.tab-btn:hover:not(:disabled) { color: var(--text); opacity: 1; transform: none; }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: contents; }
+
+/* ── Cyclic Test ── */
+.cy-ch-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.cy-ch-item { display: flex; align-items: center; gap: 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 13px; cursor: pointer; user-select: none; transition: border-color .2s; }
+.cy-ch-item:hover { border-color: var(--accent); }
+.cy-ch-item input { margin: 0; cursor: pointer; accent-color: var(--accent); width: 14px; height: 14px; }
+.cy-ch-item label { font-size: 13px; font-weight: 600; cursor: pointer; }
+.cy-status-row   { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+.cy-status-badge { display: inline-flex; align-items: center; padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; letter-spacing: .5px; background: var(--border); color: var(--muted); white-space: nowrap; }
+.cy-status-badge.cy-waiting { background: rgba(245,158,11,.15); color: var(--warn); }
+.cy-status-badge.cy-on      { background: rgba(16,185,129,.15); color: var(--ok); animation: blink 1.5s infinite; }
+.cy-status-info { display: flex; gap: 20px; flex-wrap: wrap; font-size: 13px; }
+.cy-status-info span { color: var(--muted); }
+.cy-status-info strong { color: var(--text); }
+.cy-log { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-family: 'Menlo','Consolas',monospace; font-size: 11px; color: var(--muted); height: 130px; overflow-y: auto; margin-top: 12px; }
+.cy-log-entry { padding: 2px 0; line-height: 1.5; }
+.cy-ts       { color: var(--muted); margin-right: 8px; }
+.cy-on-msg   { color: var(--ok); }
+.cy-off-msg  { color: var(--danger); }
+.cy-done-msg { color: var(--accent); }
+
 /* ── Firmware flash ── */
 .flash-zone { border: 1.5px dashed var(--border); border-radius: 6px; padding: 18px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; margin-bottom: 14px; }
 .flash-zone:hover, .flash-zone.drag { border-color: var(--accent); background: rgba(0,201,167,.04); }
@@ -249,7 +277,14 @@ button:disabled { opacity: .28; cursor: default; }
   <button class="update-dismiss" onclick="document.getElementById('update-banner').classList.remove('show')" title="Dismiss">✕</button>
 </div>
 
+<nav class="tab-bar">
+  <button class="tab-btn active" data-tab="monitor">Monitor</button>
+  <button class="tab-btn"        data-tab="cyclic">Cyclic Test</button>
+</nav>
+
 <main>
+
+  <div id="tab-monitor" class="tab-panel active">
 
   <!-- Connection -->
   <div class="card">
@@ -389,6 +424,108 @@ button:disabled { opacity: .28; cursor: default; }
     </div>
   </div>
 
+  </div><!-- /tab-monitor -->
+
+  <div id="tab-cyclic" class="tab-panel">
+
+  <!-- Cyclic Test -->
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-title">Cyclic Test</span>
+      <span class="card-sub">Sensor-triggered solenoid control</span>
+    </div>
+
+    <div class="row" style="margin-bottom:16px">
+      <div class="field field-md">
+        <label>Monitor Sensor</label>
+        <select id="cy-sensor">
+          <option value="-1">Average of all connected</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:16px">
+      <div>
+        <div class="section-label" style="color:var(--ok);margin-bottom:8px">ON Condition &mdash; turn solenoids ON when</div>
+        <div class="row">
+          <div class="field field-sm"><label>Metric</label>
+            <select id="cy-on-metric">
+              <option value="temp">Temperature (&deg;C)</option>
+              <option value="humidity">Humidity (%)</option>
+            </select>
+          </div>
+          <div class="field field-sm"><label>Operator</label>
+            <select id="cy-on-op">
+              <option value="gt">&gt; &nbsp;greater than</option>
+              <option value="lt">&lt; &nbsp;less than</option>
+              <option value="gte">&gt;= greater or equal</option>
+              <option value="lte">&lt;= less or equal</option>
+            </select>
+          </div>
+          <div class="field field-sm"><label>Threshold</label>
+            <input type="number" id="cy-on-thr" value="40" step="0.5">
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="section-label" style="color:var(--danger);margin-bottom:8px">OFF Condition &mdash; turn solenoids OFF when</div>
+        <div class="row">
+          <div class="field field-sm"><label>Metric</label>
+            <select id="cy-off-metric">
+              <option value="temp">Temperature (&deg;C)</option>
+              <option value="humidity">Humidity (%)</option>
+            </select>
+          </div>
+          <div class="field field-sm"><label>Operator</label>
+            <select id="cy-off-op">
+              <option value="lt">&lt; &nbsp;less than</option>
+              <option value="gt">&gt; &nbsp;greater than</option>
+              <option value="lte">&lt;= less or equal</option>
+              <option value="gte">&gt;= greater or equal</option>
+            </select>
+          </div>
+          <div class="field field-sm"><label>Threshold</label>
+            <input type="number" id="cy-off-thr" value="35" step="0.5">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <div class="section-label" style="margin-bottom:8px">MOSFET Channels (Solenoids to control)</div>
+      <div class="cy-ch-grid" id="cy-channels"></div>
+      <p class="note" style="margin-top:8px">Manual MOSFET toggles above will be overridden while the test is running.</p>
+    </div>
+
+    <div class="row" style="margin-bottom:18px">
+      <div class="field field-sm">
+        <label>Cycles (0 = &infin;)</label>
+        <input type="number" id="cy-max-cycles" value="0" min="0">
+      </div>
+      <div class="field field-sm">
+        <label>Max ON duration (s, 0 = none)</label>
+        <input type="number" id="cy-safety" value="120" min="0">
+      </div>
+      <button class="btn-primary" id="btn-cy-start">Start Test</button>
+      <button class="btn-danger"  id="btn-cy-stop" disabled>Stop Test</button>
+    </div>
+
+    <div id="cy-status-panel" style="display:none">
+      <div class="divider" style="margin-top:4px"></div>
+      <div class="cy-status-row">
+        <span class="cy-status-badge" id="cy-phase-badge">IDLE</span>
+        <div class="cy-status-info">
+          <span>Cycle <strong id="cy-cycle-count">0</strong> / <strong id="cy-max-count">&infin;</strong></span>
+          <span>In phase: <strong id="cy-elapsed">0.0 s</strong></span>
+          <span>Temp: <strong id="cy-live-t">&mdash;</strong></span>
+          <span>Hum: <strong id="cy-live-h">&mdash;</strong></span>
+        </div>
+      </div>
+      <div class="cy-log" id="cy-log"></div>
+    </div>
+  </div>
+
+  </div><!-- /tab-cyclic -->
 
 </main>
 <div id="toast"></div>
@@ -735,6 +872,125 @@ fetch('/api/version').then(r => r.json()).then(d => {
 });
 
 loadPorts();
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
+  });
+});
+
+// ── Cyclic Test ──────────────────────────────────────────────────────────────
+
+// Populate sensor selector
+(function() {
+  const sel = document.getElementById('cy-sensor');
+  for (let i = 0; i < N_SHT; i++) {
+    const ch = i < 8 ? i : i - 8;
+    const b  = i < 8 ? 1 : 2;
+    sel.insertAdjacentHTML('beforeend',
+      `<option value="${i}">SHT${i} — Board ${b} CH${ch}</option>`);
+  }
+})();
+
+// Populate MOSFET channel checkboxes
+(function() {
+  const grid = document.getElementById('cy-channels');
+  for (let i = 0; i < 8; i++) {
+    grid.insertAdjacentHTML('beforeend', `
+      <div class="cy-ch-item">
+        <input type="checkbox" id="cy-ch-${i}">
+        <label for="cy-ch-${i}">CH${i}</label>
+      </div>`);
+  }
+})();
+
+let _cyRunning = false;
+
+document.getElementById('btn-cy-start').onclick = () => {
+  const channels = [];
+  for (let i = 0; i < 8; i++) {
+    if (document.getElementById(`cy-ch-${i}`).checked) channels.push(i);
+  }
+  if (!channels.length) { toast('Select at least one MOSFET channel', true); return; }
+
+  const cfg = {
+    sensor_idx: parseInt(document.getElementById('cy-sensor').value),
+    on_cond: {
+      metric:    document.getElementById('cy-on-metric').value,
+      op:        document.getElementById('cy-on-op').value,
+      threshold: parseFloat(document.getElementById('cy-on-thr').value),
+    },
+    off_cond: {
+      metric:    document.getElementById('cy-off-metric').value,
+      op:        document.getElementById('cy-off-op').value,
+      threshold: parseFloat(document.getElementById('cy-off-thr').value),
+    },
+    channels,
+    max_cycles: parseInt(document.getElementById('cy-max-cycles').value) || 0,
+    safety_s:   parseInt(document.getElementById('cy-safety').value)     || 0,
+  };
+
+  fetch('/api/cyclic/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(cfg),
+  }).then(r => r.json()).then(r => {
+    if (!r.ok) { toast(r.error, true); return; }
+    _cyRunning = true;
+    document.getElementById('btn-cy-start').disabled = true;
+    document.getElementById('btn-cy-stop').disabled  = false;
+    document.getElementById('cy-status-panel').style.display = '';
+    document.getElementById('cy-log').innerHTML = '';
+    toast('Cyclic test started');
+  });
+};
+
+document.getElementById('btn-cy-stop').onclick = () => {
+  fetch('/api/cyclic/stop', {method: 'POST'}).then(() => toast('Stop signal sent'));
+};
+
+socket.on('cyclic_state', d => {
+  const phaseMap = {
+    IDLE:       {label: 'IDLE',              cls: ''},
+    WAITING_ON: {label: 'WAITING · ON', cls: 'cy-waiting'},
+    ON:         {label: '● ON',          cls: 'cy-on'},
+  };
+  const pm    = phaseMap[d.phase] || {label: d.phase, cls: ''};
+  const badge = document.getElementById('cy-phase-badge');
+  badge.textContent = pm.label;
+  badge.className   = 'cy-status-badge ' + pm.cls;
+
+  document.getElementById('cy-cycle-count').textContent = d.cycle;
+  document.getElementById('cy-max-count').textContent   = d.max_cycles || '∞';
+  document.getElementById('cy-elapsed').textContent     = d.elapsed_s + ' s';
+  document.getElementById('cy-live-t').textContent =
+    d.sensor_val != null ? d.sensor_val.toFixed(1) + ' °C' : '—';
+  document.getElementById('cy-live-h').textContent =
+    d.sensor_hum != null ? d.sensor_hum.toFixed(1) + ' %' : '—';
+
+  if (!d.running && _cyRunning) {
+    _cyRunning = false;
+    document.getElementById('btn-cy-start').disabled = false;
+    document.getElementById('btn-cy-stop').disabled  = true;
+  }
+});
+
+socket.on('cyclic_log', e => {
+  const log = document.getElementById('cy-log');
+  if (!log) return;
+  const msgCls = e.msg.includes(': ON')
+    ? 'cy-on-msg'
+    : (e.msg.includes(': OFF') ? 'cy-off-msg'
+    : (e.msg.includes('complete') || e.msg.includes('stopped') ? 'cy-done-msg' : ''));
+  const div = document.createElement('div');
+  div.className = 'cy-log-entry';
+  div.innerHTML = `<span class="cy-ts">${e.ts}</span><span class="${msgCls}">${e.msg}</span>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+});
 </script>
 </body>
 </html>"""
@@ -1038,6 +1294,165 @@ def api_firmware_flash_github():
 
     threading.Thread(target=_download_and_flash, daemon=True).start()
     return jsonify({'ok': True})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cyclic Test Engine
+# ──────────────────────────────────────────────────────────────────────────────
+
+_cyclic_lock  = threading.Lock()
+_cyclic_stop  = threading.Event()
+_cyclic_state = {
+    'running': False, 'phase': 'IDLE', 'cycle': 0, 'max_cycles': 0,
+    'elapsed_s': 0.0, 'sensor_val': None, 'sensor_hum': None, 'log': [],
+}
+
+_OP_MAP = {'gt': '>', 'lt': '<', 'gte': '>=', 'lte': '<='}
+
+
+def _eval_cond(cond, t, h):
+    metric = cond.get('metric', 'temp')
+    val    = t if metric == 'temp' else h
+    if val is None:
+        return False
+    op  = _OP_MAP.get(cond.get('op', 'gt'), '>')
+    thr = float(cond.get('threshold', 0))
+    return {'>': val > thr, '<': val < thr, '>=': val >= thr, '<=': val <= thr}.get(op, False)
+
+
+def _sht_reading(sensor_idx):
+    sht = _latest.get('sht', [])
+    if sensor_idx == -1:
+        pairs = [(s.get('t'), s.get('h')) for s in sht
+                 if s and not (s.get('t', 0) == 0 and s.get('h', 0) == 0)]
+        if not pairs:
+            return None, None
+        return (sum(p[0] for p in pairs) / len(pairs),
+                sum(p[1] for p in pairs) / len(pairs))
+    if sensor_idx < len(sht):
+        s = sht[sensor_idx]
+        if s and not (s.get('t', 0) == 0 and s.get('h', 0) == 0):
+            return s.get('t'), s.get('h')
+    return None, None
+
+
+def _cy_log(msg):
+    ts    = datetime.now().strftime('%H:%M:%S')
+    entry = {'ts': ts, 'msg': msg}
+    with _cyclic_lock:
+        _cyclic_state['log'].append(entry)
+        if len(_cyclic_state['log']) > 200:
+            _cyclic_state['log'].pop(0)
+    socketio.emit('cyclic_log', entry)
+
+
+def _cy_update(**kw):
+    with _cyclic_lock:
+        _cyclic_state.update(kw)
+        snap = {k: v for k, v in _cyclic_state.items() if k != 'log'}
+    socketio.emit('cyclic_state', snap)
+
+
+def _cyclic_runner(cfg, stop):
+    sensor_idx = cfg.get('sensor_idx', 0)
+    on_cond    = cfg.get('on_cond',  {})
+    off_cond   = cfg.get('off_cond', {})
+    channels   = cfg.get('channels', [])
+    max_cycles = cfg.get('max_cycles', 0)
+    safety_s   = cfg.get('safety_s',  0)
+
+    def set_mosfets(on):
+        for ch in channels:
+            _send_to_esp32({'cmd': 'mosfet', 'ch': ch, 'on': on})
+
+    def sensor_tag(cond, t, h):
+        m = cond.get('metric', 'temp')
+        if m == 'temp'     and t is not None: return f'T={t:.1f}°C'
+        if m == 'humidity' and h is not None: return f'H={h:.1f}%'
+        return '—'
+
+    cycle = 0
+    try:
+        while not stop.is_set():
+            _cy_update(phase='WAITING_ON', cycle=cycle, elapsed_s=0.0)
+            _cy_log(f'Cycle {cycle + 1}: waiting for ON condition…')
+            t0 = time.monotonic()
+            while not stop.is_set():
+                t, h = _sht_reading(sensor_idx)
+                _cy_update(sensor_val=t, sensor_hum=h,
+                           elapsed_s=round(time.monotonic() - t0, 1))
+                if t is not None and _eval_cond(on_cond, t, h):
+                    break
+                stop.wait(0.5)
+            if stop.is_set():
+                break
+
+            cycle += 1
+            t, h = _sht_reading(sensor_idx)
+            _cy_log(f'Cycle {cycle}: ON — {sensor_tag(on_cond, t, h)}')
+            set_mosfets(True)
+            _cy_update(phase='ON', cycle=cycle, elapsed_s=0.0)
+            t0 = time.monotonic()
+            while not stop.is_set():
+                t, h    = _sht_reading(sensor_idx)
+                elapsed = time.monotonic() - t0
+                _cy_update(sensor_val=t, sensor_hum=h,
+                           elapsed_s=round(elapsed, 1))
+                if safety_s > 0 and elapsed >= safety_s:
+                    _cy_log(f'Cycle {cycle}: safety timeout ({safety_s} s) — forcing OFF')
+                    break
+                if t is not None and _eval_cond(off_cond, t, h):
+                    break
+                stop.wait(0.5)
+
+            t, h = _sht_reading(sensor_idx)
+            dur  = round(time.monotonic() - t0, 1)
+            _cy_log(f'Cycle {cycle}: OFF — {sensor_tag(off_cond, t, h)}  (ON for {dur} s)')
+            set_mosfets(False)
+            _cy_update(phase='IDLE', elapsed_s=0.0)
+
+            if stop.is_set():
+                break
+            if max_cycles > 0 and cycle >= max_cycles:
+                _cy_log(f'Test complete — {cycle} cycle(s) done.')
+                break
+            stop.wait(1.0)
+    finally:
+        set_mosfets(False)
+        _cy_update(running=False, phase='IDLE', elapsed_s=0.0)
+        _cy_log('Test stopped.')
+
+
+@app.route('/api/cyclic/start', methods=['POST'])
+def api_cyclic_start():
+    global _cyclic_stop
+    with _cyclic_lock:
+        if _cyclic_state.get('running'):
+            return jsonify({'ok': False, 'error': 'Test already running'})
+    cfg = request.get_json() or {}
+    if not cfg.get('channels'):
+        return jsonify({'ok': False, 'error': 'Select at least one MOSFET channel'})
+    _cyclic_stop = threading.Event()
+    with _cyclic_lock:
+        _cyclic_state.update({
+            'running': True, 'phase': 'IDLE', 'cycle': 0,
+            'max_cycles': cfg.get('max_cycles', 0),
+            'elapsed_s': 0.0, 'sensor_val': None, 'sensor_hum': None, 'log': [],
+        })
+    threading.Thread(target=_cyclic_runner, args=(cfg, _cyclic_stop), daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/cyclic/stop', methods=['POST'])
+def api_cyclic_stop():
+    _cyclic_stop.set()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/cyclic/state')
+def api_cyclic_state_route():
+    with _cyclic_lock:
+        return jsonify(dict(_cyclic_state))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
