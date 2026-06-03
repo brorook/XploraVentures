@@ -299,7 +299,7 @@ HTML = r"""<!DOCTYPE html>
       <hr class="divider">
       <div class="row">
         <label>Setpoint (°C)</label>
-        <input type="number" id="spInput" value="30" step="0.5" min="-40" max="150">
+        <input type="number" id="spInput" value="30" step="0.5" min="-40" max="150" onkeydown="if(event.key==='Enter') sendSetpoint()">
         <button class="btn" onclick="sendSetpoint()">Set</button>
       </div>
     </div>
@@ -349,6 +349,7 @@ fetch("/api/ip").then(r => r.json()).then(d => {
 
 const socket = io();
 let connected = false;
+let pendingSetpoint = null;
 const MAX_POINTS = 300;  // ~10 min at 2 s/sample
 
 // ── Chart setup ──────────────────────────────────────────────────────────────
@@ -438,8 +439,11 @@ socket.on("telemetry", d => {
   }
   // Setpoint
   const sp = d.setpoint ?? parseFloat(document.getElementById("spInput").value);
-  if (d.setpoint !== undefined && document.getElementById("spInput") !== document.activeElement)
-    document.getElementById("spInput").value = d.setpoint;
+  if (d.setpoint !== undefined) {
+    const el = document.getElementById("spInput");
+    if (pendingSetpoint !== null && d.setpoint === pendingSetpoint) pendingSetpoint = null;
+    if (pendingSetpoint === null && el !== document.activeElement) el.value = d.setpoint;
+  }
   // FW
   if (d.fw) {
     const b = document.getElementById("fwBadge");
@@ -481,7 +485,7 @@ async function sendCmd(obj) {
 
 function sendSetpoint() {
   const v = parseFloat(document.getElementById("spInput").value);
-  if (!isNaN(v)) sendCmd({ cmd: "set_sp", val: v });
+  if (!isNaN(v)) { pendingSetpoint = v; sendCmd({ cmd: "set_sp", val: v }); }
 }
 
 function setSolenoid(on) { sendCmd({ cmd: "solenoid", on }); }
