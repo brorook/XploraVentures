@@ -26,7 +26,6 @@ _log_file  = None
 _log_writer= None
 _log_path  = None
 _log_lock  = threading.Lock()
-
 # ─── Serial ───────────────────────────────────────────────────────────────────
 
 def _serial_reader():
@@ -69,6 +68,7 @@ def _log_row(data):
             int(data.get("heater",   False)),
             int(data.get("solenoid", False)),
             data.get("setpoint", ""),
+            data.get("pid_pct", ""),
         ])
         _log_file.flush()
 
@@ -120,7 +120,7 @@ def api_log_start():
         _log_path = f"accel_reactor_{ts}.csv"
         _log_file = open(_log_path, "w", newline="")
         _log_writer = csv.writer(_log_file)
-        _log_writer.writerow(["timestamp","ch1_t","ch1_h","ch3_t","ch3_h","heater","solenoid","setpoint"])
+        _log_writer.writerow(["timestamp","ch1_t","ch1_h","ch3_t","ch3_h","heater","solenoid","setpoint","pid_pct"])
     return jsonify({"ok": True, "file": _log_path})
 
 @app.route("/api/log/stop", methods=["POST"])
@@ -131,6 +131,18 @@ def api_log_stop():
             _log_file.close()
         _log_file = _log_writer = None
     return jsonify({"ok": True})
+
+@app.route("/api/ip")
+def api_ip():
+    import socket as _socket
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        ip = "127.0.0.1"
+    return jsonify({"ip": ip, "port": 8080})
 
 @app.route("/api/log/download")
 def api_log_download():
@@ -224,7 +236,10 @@ HTML = r"""<!DOCTYPE html>
 <body>
 
 <header>
-  <h1>XploraVentures</h1>
+  <div style="display:flex; flex-direction:column; gap:2px;">
+    <span id="ipBadge" style="font-size:0.68rem; color:#6b7280; letter-spacing:0.03em;"></span>
+    <h1>XploraVentures</h1>
+  </div>
   <span class="badge">Accelerated Reactor</span>
   <span id="fwBadge" class="badge" style="display:none"></span>
   <div id="connDot" class="dot" title="Serial connection"></div>
@@ -279,17 +294,18 @@ HTML = r"""<!DOCTYPE html>
     <!-- Heater -->
     <div class="card">
       <h3>Coil Heater — MOSFET CH0</h3>
-      <div class="row" style="margin-bottom:14px">
+      <div class="row" style="margin-bottom:8px">
         <span id="heaterPill" class="status-pill off"><span class="dot"></span> OFF</span>
+        <span id="dutyBadge" style="margin-left:10px;font-size:0.82rem;color:#f59e0b">Duty: --%</span>
+      </div>
+      <div style="background:#252836;border-radius:4px;height:6px;margin-bottom:14px">
+        <div id="dutyBar" style="background:#f59e0b;border-radius:4px;height:6px;width:0%;transition:width 0.4s"></div>
       </div>
       <hr class="divider">
       <div class="row">
         <label>Setpoint (°C)</label>
         <input type="number" id="spInput" value="30" step="0.5" min="-40" max="150">
         <button class="btn" onclick="sendSetpoint()">Set</button>
-      </div>
-      <div class="row" style="margin-top:4px">
-        <span style="font-size:0.78rem;color:#6b7280">Firmware controls heater automatically based on Ch3 vs setpoint.</span>
       </div>
     </div>
 
@@ -304,6 +320,29 @@ HTML = r"""<!DOCTYPE html>
         <button class="btn success" onclick="setSolenoid(true)">Open</button>
         <button class="btn danger"  onclick="setSolenoid(false)">Close</button>
       </div>
+    </div>
+  </div>
+
+  <!-- PID Tuning -->
+  <div class="card" style="margin-bottom:16px">
+    <h3>PID Tuning</h3>
+    <div class="grid grid-3">
+      <div class="row">
+        <label>Kp</label>
+        <input type="number" id="pidKp" value="15" step="0.5" min="0">
+      </div>
+      <div class="row">
+        <label>Ki</label>
+        <input type="number" id="pidKi" value="0.119" step="0.001" min="0">
+      </div>
+      <div class="row">
+        <label>Kd</label>
+        <input type="number" id="pidKd" value="0" step="0.1" min="0">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="sendPid()">Apply</button>
+      <span style="font-size:0.78rem;color:#6b7280;margin-left:10px">Changes take effect immediately. Values echo back in telemetry.</span>
     </div>
   </div>
 
@@ -332,6 +371,10 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
+fetch("/api/ip").then(r => r.json()).then(d => {
+  document.getElementById("ipBadge").textContent = d.ip + ":" + d.port;
+});
+
 const socket = io();
 let connected = false;
 const MAX_POINTS = 300;  // ~10 min at 2 s/sample
@@ -348,6 +391,7 @@ const chart = new Chart(ctx, {
       { label: "Setpoint (°C)",  yAxisID: "yT", data: [], borderColor: "#ef4444", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, borderDash: [6,3], tension: 0 },
       { label: "Ch1 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#60a5fa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
       { label: "Ch3 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#fbbf24", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
+      { label: "PID Duty (%)",     yAxisID: "yH", data: [], borderColor: "#a78bfa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
     ]
   },
   options: {
@@ -374,7 +418,7 @@ const chart = new Chart(ctx, {
   }
 });
 
-function pushChart(t1, h1, t3, h3, sp) {
+function pushChart(t1, h1, t3, h3, sp, duty) {
   const ts = new Date().toLocaleTimeString();
   const ds = chart.data.datasets;
   const labels = chart.data.labels;
@@ -384,6 +428,7 @@ function pushChart(t1, h1, t3, h3, sp) {
   ds[2].data.push(sp);
   ds[3].data.push(h1);
   ds[4].data.push(h3);
+  ds[5].data.push(duty ?? null);
   if (labels.length > MAX_POINTS) {
     labels.shift();
     ds.forEach(d => d.data.shift());
@@ -409,11 +454,25 @@ socket.on("telemetry", d => {
     document.getElementById("ch3T").innerHTML = d.sht3.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
     document.getElementById("ch3H").textContent = "Humidity: " + d.sht3.h.toFixed(1) + " %";
   }
-  // Heater
+  // Heater + duty
   if (d.heater !== undefined) {
     const p = document.getElementById("heaterPill");
     p.className = "status-pill " + (d.heater ? "on" : "off");
     p.innerHTML = '<span class="dot"></span> ' + (d.heater ? "ON" : "OFF");
+  }
+  if (d.pid_pct !== undefined) {
+    document.getElementById("dutyBadge").textContent = "Duty: " + d.pid_pct + "%";
+    document.getElementById("dutyBar").style.width = d.pid_pct + "%";
+  }
+  // PID tunings (populate inputs once, only when not focused)
+  if (d.pid) {
+    const focused = document.activeElement;
+    const kpEl = document.getElementById("pidKp");
+    const kiEl = document.getElementById("pidKi");
+    const kdEl = document.getElementById("pidKd");
+    if (kpEl !== focused) kpEl.value = d.pid.kp;
+    if (kiEl !== focused) kiEl.value = d.pid.ki;
+    if (kdEl !== focused) kdEl.value = d.pid.kd;
   }
   // Solenoid
   if (d.solenoid !== undefined) {
@@ -432,7 +491,7 @@ socket.on("telemetry", d => {
   }
   // Push to chart whenever we have both sensors
   if (d.sht1 !== undefined && d.sht3 !== undefined)
-    pushChart(d.sht1.t, d.sht1.h, d.sht3.t, d.sht3.h, sp);
+    pushChart(d.sht1.t, d.sht1.h, d.sht3.t, d.sht3.h, sp, d.pid_pct);
 });
 
 async function refreshPorts() {
@@ -470,6 +529,14 @@ function sendSetpoint() {
 }
 
 function setSolenoid(on) { sendCmd({ cmd: "solenoid", on }); }
+
+function sendPid() {
+  const kp = parseFloat(document.getElementById("pidKp").value);
+  const ki = parseFloat(document.getElementById("pidKi").value);
+  const kd = parseFloat(document.getElementById("pidKd").value);
+  if ([kp, ki, kd].some(isNaN)) return;
+  sendCmd({ cmd: "set_pid", kp, ki, kd });
+}
 
 async function logStart() {
   const r = await fetch("/api/log/start", { method:"POST" });
