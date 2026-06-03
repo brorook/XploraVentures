@@ -5,13 +5,14 @@
 #include "pin_definitions.h"
 
 // ── Version ───────────────────────────────────────────────────────────────────
-#define FW_VERSION      "1.2.0-ar"
+#define FW_VERSION      "1.3.0-ar"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 #define TELEMETRY_MS    2000
 
-// ── Heater setpoint (°C) ──────────────────────────────────────────────────────
-static float g_setpoint = 30.0f;
+// ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
+static float g_setpoint   = 30.0f;
+static float g_hysteresis = 0.5f;
 
 // ── Sensor state ──────────────────────────────────────────────────────────────
 static float g_t1 = 0.0f, g_h1 = 0.0f;   // SHT45 Channel 1 (mux 0)
@@ -93,8 +94,8 @@ static void readSensors() {
 // =============================================================================
 
 static void updateHeater() {
-    if (!g_heater && g_t3 < g_setpoint - 0.5f) setMosfet(0, true);
-    if ( g_heater && g_t3 >= g_setpoint)        setMosfet(0, false);
+    if (!g_heater && g_t3 < g_setpoint - g_hysteresis) setMosfet(0, true);
+    if ( g_heater && g_t3 >= g_setpoint)               setMosfet(0, false);
 }
 
 // =============================================================================
@@ -109,7 +110,8 @@ static void emitTelemetry() {
     doc["sht3"]["h"]  = roundf(g_h3 * 10) / 10.0f;
     doc["heater"]     = g_heater;
     doc["solenoid"]   = g_solenoid;
-    doc["setpoint"]   = roundf(g_setpoint * 10) / 10.0f;
+    doc["setpoint"]   = roundf(g_setpoint   * 10) / 10.0f;
+    doc["hysteresis"] = roundf(g_hysteresis * 10) / 10.0f;
     doc["fw"]         = FW_VERSION;
     serializeJson(doc, Serial);
     Serial.print('\n');
@@ -125,7 +127,8 @@ static void handleCommand(const String &line) {
     const char *cmd = doc["cmd"];
     if (!cmd) return;
 
-    if      (strcmp(cmd, "set_sp")   == 0) g_setpoint = doc["val"].as<float>();
+    if      (strcmp(cmd, "set_sp")   == 0) g_setpoint   = doc["val"].as<float>();
+    else if (strcmp(cmd, "set_hyst") == 0) g_hysteresis = max(0.0f, doc["val"].as<float>());
     else if (strcmp(cmd, "solenoid") == 0) setMosfet(1, doc["on"].as<bool>());
 }
 

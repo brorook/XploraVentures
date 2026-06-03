@@ -302,6 +302,11 @@ HTML = r"""<!DOCTYPE html>
         <input type="number" id="spInput" value="30" step="0.5" min="-40" max="150" onkeydown="if(event.key==='Enter') sendSetpoint()">
         <button class="btn" onclick="sendSetpoint()">Set</button>
       </div>
+      <div class="row">
+        <label>Hysteresis (°C)</label>
+        <input type="number" id="hystInput" value="0.5" step="0.1" min="0" max="10" onkeydown="if(event.key==='Enter') sendHysteresis()">
+        <button class="btn ghost" onclick="sendHysteresis()">Set</button>
+      </div>
     </div>
 
     <!-- Solenoid -->
@@ -349,7 +354,8 @@ fetch("/api/ip").then(r => r.json()).then(d => {
 
 const socket = io();
 let connected = false;
-let pendingSetpoint = null;
+let pendingSetpoint   = null;
+let pendingHysteresis = null;
 const MAX_POINTS = 300;  // ~10 min at 2 s/sample
 
 // ── Chart setup ──────────────────────────────────────────────────────────────
@@ -444,6 +450,12 @@ socket.on("telemetry", d => {
     if (pendingSetpoint !== null && d.setpoint === pendingSetpoint) pendingSetpoint = null;
     if (pendingSetpoint === null && el !== document.activeElement) el.value = d.setpoint;
   }
+  // Hysteresis
+  if (d.hysteresis !== undefined) {
+    const el = document.getElementById("hystInput");
+    if (pendingHysteresis !== null && d.hysteresis === pendingHysteresis) pendingHysteresis = null;
+    if (pendingHysteresis === null && el !== document.activeElement) el.value = d.hysteresis;
+  }
   // FW
   if (d.fw) {
     const b = document.getElementById("fwBadge");
@@ -486,6 +498,11 @@ async function sendCmd(obj) {
 function sendSetpoint() {
   const v = parseFloat(document.getElementById("spInput").value);
   if (!isNaN(v)) { pendingSetpoint = v; sendCmd({ cmd: "set_sp", val: v }); }
+}
+
+function sendHysteresis() {
+  const v = parseFloat(document.getElementById("hystInput").value);
+  if (!isNaN(v) && v >= 0) { pendingHysteresis = v; sendCmd({ cmd: "set_hyst", val: v }); }
 }
 
 function setSolenoid(on) { sendCmd({ cmd: "solenoid", on }); }
