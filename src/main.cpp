@@ -1,19 +1,14 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
-#include <PID_v1.h>
 
 #include "pin_definitions.h"
 
 // ── Version ───────────────────────────────────────────────────────────────────
-#define FW_VERSION      "1.1.0-ar"
+#define FW_VERSION      "1.2.0-ar"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 #define TELEMETRY_MS    2000
-#define PID_WINDOW_MS   5000
-
-// ── PID tuning (from step-response, SIMC integrating process) ─────────────────
-static double g_kp = 15.0, g_ki = 0.119, g_kd = 0.0;
 
 // ── Heater setpoint (°C) ──────────────────────────────────────────────────────
 static float g_setpoint = 30.0f;
@@ -23,13 +18,6 @@ static float g_t1 = 0.0f, g_h1 = 0.0f;   // SHT45 Channel 1 (mux 0)
 static float g_t3 = 0.0f, g_h3 = 0.0f;   // SHT45 Channel 3 (mux 2)
 static bool  g_heater   = false;           // MOSFET CH0 — coil heater
 static bool  g_solenoid = false;           // MOSFET CH1 — solenoid
-
-// ── PID ───────────────────────────────────────────────────────────────────────
-static double g_pid_input    = 0.0;
-static double g_pid_output   = 0.0;
-static double g_pid_setpoint = 30.0;
-static PID    g_pid(&g_pid_input, &g_pid_output, &g_pid_setpoint,
-                    g_kp, g_ki, g_kd, DIRECT);
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
 static String    g_rxBuf;
@@ -101,15 +89,12 @@ static void readSensors() {
 }
 
 // =============================================================================
-// Heater control — PID + time-proportioning (5 s window)
+// Heater control — on/off thermostat with hysteresis
 // =============================================================================
 
 static void updateHeater() {
-    static uint32_t windowStart = 0;
-    uint32_t now = millis();
-    if (now - windowStart >= PID_WINDOW_MS) windowStart = now;
-    bool on = (double)(now - windowStart) < (g_pid_output / 255.0 * PID_WINDOW_MS);
-    if (on != g_heater) setMosfet(0, on);
+    if (!g_heater && g_t3 < g_setpoint - 0.5f) setMosfet(0, true);
+    if ( g_heater && g_t3 >= g_setpoint)        setMosfet(0, false);
 }
 
 // =============================================================================
@@ -125,10 +110,6 @@ static void emitTelemetry() {
     doc["heater"]     = g_heater;
     doc["solenoid"]   = g_solenoid;
     doc["setpoint"]   = roundf(g_setpoint * 10) / 10.0f;
-    doc["pid_pct"]    = (uint8_t)round(g_pid_output / 255.0 * 100);
-    doc["pid"]["kp"]  = g_kp;
-    doc["pid"]["ki"]  = g_ki;
-    doc["pid"]["kd"]  = g_kd;
     doc["fw"]         = FW_VERSION;
     serializeJson(doc, Serial);
     Serial.print('\n');
@@ -146,12 +127,6 @@ static void handleCommand(const String &line) {
 
     if      (strcmp(cmd, "set_sp")   == 0) g_setpoint = doc["val"].as<float>();
     else if (strcmp(cmd, "solenoid") == 0) setMosfet(1, doc["on"].as<bool>());
-    else if (strcmp(cmd, "set_pid")  == 0) {
-        g_kp = doc["kp"] | g_kp;
-        g_ki = doc["ki"] | g_ki;
-        g_kd = doc["kd"] | g_kd;
-        g_pid.SetTunings(g_kp, g_ki, g_kd);
-    }
 }
 
 static void checkSerial() {
@@ -182,10 +157,6 @@ void setup() {
     pinMode(LED_WIFI, OUTPUT); digitalWrite(LED_WIFI, LOW);
     pinMode(LED_FLT,  OUTPUT); digitalWrite(LED_FLT,  LOW);
 
-    g_pid.SetMode(AUTOMATIC);
-    g_pid.SetOutputLimits(0, 255);
-    g_pid.SetSampleTime(TELEMETRY_MS);
-
     pcfFlush();   // all MOSFETs off
 }
 
@@ -198,12 +169,8 @@ void loop() {
     if (now - lastTelemetry >= TELEMETRY_MS) {
         lastTelemetry = now;
         readSensors();
-        g_pid_input    = g_t3;
-        g_pid_setpoint = g_setpoint;
+        updateHeater();
         digitalWrite(LED_HB, !digitalRead(LED_HB));
         emitTelemetry();
     }
-
-    g_pid.Compute();
-    updateHeater();
 }
