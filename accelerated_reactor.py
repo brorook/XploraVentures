@@ -354,8 +354,7 @@ fetch("/api/ip").then(r => r.json()).then(d => {
 
 const socket = io();
 let connected = false;
-let pendingSetpoint   = null;
-let pendingHysteresis = null;
+
 const MAX_POINTS = 300;  // ~10 min at 2 s/sample
 
 // ── Chart setup ──────────────────────────────────────────────────────────────
@@ -445,17 +444,11 @@ socket.on("telemetry", d => {
   }
   // Setpoint
   const sp = d.setpoint ?? parseFloat(document.getElementById("spInput").value);
-  if (d.setpoint !== undefined) {
-    const el = document.getElementById("spInput");
-    if (pendingSetpoint !== null && d.setpoint === pendingSetpoint) pendingSetpoint = null;
-    if (pendingSetpoint === null && el !== document.activeElement) el.value = d.setpoint;
-  }
+  if (d.setpoint !== undefined && document.getElementById("spInput") !== document.activeElement)
+    document.getElementById("spInput").value = d.setpoint;
   // Hysteresis
-  if (d.hysteresis !== undefined) {
-    const el = document.getElementById("hystInput");
-    if (pendingHysteresis !== null && d.hysteresis === pendingHysteresis) pendingHysteresis = null;
-    if (pendingHysteresis === null && el !== document.activeElement) el.value = d.hysteresis;
-  }
+  if (d.hysteresis !== undefined && document.getElementById("hystInput") !== document.activeElement)
+    document.getElementById("hystInput").value = d.hysteresis;
   // FW
   if (d.fw) {
     const b = document.getElementById("fwBadge");
@@ -497,12 +490,12 @@ async function sendCmd(obj) {
 
 function sendSetpoint() {
   const v = parseFloat(document.getElementById("spInput").value);
-  if (!isNaN(v)) { pendingSetpoint = v; sendCmd({ cmd: "set_sp", val: v }); }
+  if (!isNaN(v)) sendCmd({ cmd: "set_sp", val: v });
 }
 
 function sendHysteresis() {
   const v = parseFloat(document.getElementById("hystInput").value);
-  if (!isNaN(v) && v >= 0) { pendingHysteresis = v; sendCmd({ cmd: "set_hyst", val: v }); }
+  if (!isNaN(v) && v >= 0) sendCmd({ cmd: "set_hyst", val: v });
 }
 
 function setSolenoid(on) { sendCmd({ cmd: "solenoid", on }); }
