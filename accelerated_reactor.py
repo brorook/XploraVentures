@@ -1,8 +1,11 @@
 """
 Accelerated Reactor Dashboard
 Flask + SocketIO dashboard for the AcceleratedReactor firmware.
-Two SHT45 sensors (Ch1, Ch3), coil heater on MOSFET CH0, solenoid on CH1.
+Two SHT45 sensors (Ch1, Ch3), coil heater on MOSFET CH0, humidifier on CH1, drier on CH2.
 """
+
+__version__ = "1.0.0"
+_RELEASES_API = "https://api.github.com/repos/brorook/XploraVentures/releases/latest"
 
 import serial
 import serial.tools.list_ports
@@ -11,7 +14,9 @@ import json
 import csv
 import os
 import datetime
+import time
 import webbrowser
+import urllib.request
 
 from flask import Flask, request, jsonify, send_file
 from flask_socketio import SocketIO
@@ -26,6 +31,28 @@ _log_file  = None
 _log_writer= None
 _log_path  = None
 _log_lock  = threading.Lock()
+
+# ─── Update check ────────────────────────────────────────────────────────────
+
+def _update_checker():
+    time.sleep(4)  # let the server fully start before checking
+    try:
+        req = urllib.request.Request(_RELEASES_API, headers={"User-Agent": "AcceleratedReactor"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            tag = json.loads(r.read())["tag_name"].lstrip("v")
+        if tag != __version__:
+            socketio.emit("update_available", {"version": tag, "current": __version__})
+    except Exception:
+        pass
+
+# ─── Cycle runner state ───────────────────────────────────────────────────────
+_last_t1        = None   # SHT45 Ch1 — inlet temperature
+_last_t3        = None   # SHT45 Ch3 — outlet temperature (heater sensor)
+_cycle_thread   = None
+_cycle_stop_evt = threading.Event()
+_cycle_status   = {"phase": "idle", "cycle": 0, "total": 0, "elapsed_s": 0, "params": {}}
+_cycle_lock     = threading.Lock()
+
 # ─── Serial ───────────────────────────────────────────────────────────────────
 
 def _serial_reader():
@@ -47,6 +74,11 @@ def _serial_reader():
             continue
         socketio.emit("telemetry", data)
         _log_row(data)
+        global _last_t1, _last_t3
+        if "sht1" in data:
+            _last_t1 = data["sht1"].get("t")
+        if "sht3" in data:
+            _last_t3 = data["sht3"].get("t")
 
 def _send(obj):
     with _ser_lock:
@@ -65,8 +97,9 @@ def _log_row(data):
             data.get("sht1", {}).get("h", ""),
             data.get("sht3", {}).get("t", ""),
             data.get("sht3", {}).get("h", ""),
-            int(data.get("heater",   False)),
-            int(data.get("solenoid", False)),
+            int(data.get("heater",    False)),
+            int(data.get("solenoid",  False)),
+            int(data.get("solenoid2", False)),
             data.get("setpoint", ""),
         ])
         _log_file.flush()
@@ -119,7 +152,7 @@ def api_log_start():
         _log_path = f"accel_reactor_{ts}.csv"
         _log_file = open(_log_path, "w", newline="")
         _log_writer = csv.writer(_log_file)
-        _log_writer.writerow(["timestamp","ch1_t","ch1_h","ch3_t","ch3_h","heater","solenoid","setpoint"])
+        _log_writer.writerow(["timestamp","ch1_t","ch1_h","ch3_t","ch3_h","heater","drier","humidifier","setpoint"])
     return jsonify({"ok": True, "file": _log_path})
 
 @app.route("/api/log/stop", methods=["POST"])
@@ -129,6 +162,139 @@ def api_log_stop():
         if _log_file:
             _log_file.close()
         _log_file = _log_writer = None
+    return jsonify({"ok": True})
+
+# ─── Cycle runner ─────────────────────────────────────────────────────────────
+
+def _emit_cycle():
+    with _cycle_lock:
+        s = dict(_cycle_status)
+    socketio.emit("cycle_status", s)
+
+def _run_cycle(charge_sp, charge_dur_s, cool_to, delta_t, num_cycles):
+    """Thermochemical storage cycle.
+    CHARGE : drier on + heater → dehydrate material at charge_sp for charge_dur_s seconds.
+    COOLDOWN: heater off, drier on, wait until Ch3 ≤ cool_to.
+    DISCHARGE: humidifier on → exothermic adsorption reaction → wait until Ch3−Ch1 ≤ delta_t.
+    """
+    global _last_t1, _last_t3
+
+    def set_phase(phase, cycle=None):
+        with _cycle_lock:
+            _cycle_status["phase"] = phase
+            if cycle is not None:
+                _cycle_status["cycle"] = cycle
+        _emit_cycle()
+
+    with _cycle_lock:
+        _cycle_status.update({
+            "total": num_cycles, "elapsed_s": 0, "delta_t_live": 0.0,
+            "params": {"charge_dur_s": charge_dur_s, "delta_t": delta_t},
+        })
+
+    for n in range(1, num_cycles + 1):
+        if _cycle_stop_evt.is_set():
+            break
+
+        # CHARGE ──────────────────────────────────────────────────────────────
+        # Drier on; heat outlet (Ch3) to charge_sp for charge_dur_s seconds.
+        set_phase("charging", n)
+        _send({"cmd": "solenoid2", "on": True})   # drier on
+        _send({"cmd": "solenoid",  "on": False})  # humidifier off
+        _send({"cmd": "set_sp",    "val": charge_sp})
+        t0 = time.monotonic()
+        while not _cycle_stop_evt.is_set():
+            elapsed = time.monotonic() - t0
+            with _cycle_lock:
+                _cycle_status["elapsed_s"] = int(elapsed)
+            _emit_cycle()
+            if elapsed >= charge_dur_s:
+                break
+            _cycle_stop_evt.wait(2.0)
+
+        if _cycle_stop_evt.is_set():
+            break
+
+        # COOLDOWN ────────────────────────────────────────────────────────────
+        # Turn heater off; keep drier on; wait until Ch3 ≤ cool_to.
+        set_phase("cooling", n)
+        _send({"cmd": "solenoid2", "on": True})   # drier on
+        _send({"cmd": "solenoid",  "on": False})  # humidifier off
+        _send({"cmd": "set_sp",    "val": 0})
+        while not _cycle_stop_evt.is_set():
+            t3 = _last_t3
+            if t3 is not None and t3 <= cool_to:
+                break
+            _cycle_stop_evt.wait(2.0)
+
+        if _cycle_stop_evt.is_set():
+            break
+
+        # DISCHARGE ────────────────────────────────────────────────────────────
+        # Switch to humidifier; wait for adsorption reaction to peak then finish.
+        # Reaction end: peaked AND Ch3−Ch1 drops back to ≤ delta_t.
+        set_phase("discharging", n)
+        _send({"cmd": "solenoid",  "on": True})   # humidifier on
+        _send({"cmd": "solenoid2", "on": False})  # drier off
+        peaked  = False
+        t_dis   = time.monotonic()
+        while not _cycle_stop_evt.is_set():
+            t3   = _last_t3
+            t1   = _last_t1
+            diff = round(t3 - t1, 1) if (t3 is not None and t1 is not None) else 0.0
+            with _cycle_lock:
+                _cycle_status["elapsed_s"]   = int(time.monotonic() - t_dis)
+                _cycle_status["delta_t_live"] = diff
+            _emit_cycle()
+            if diff > delta_t * 2:          # reaction clearly started
+                peaked = True
+            if peaked and diff <= delta_t:  # temperature differential collapsed → done
+                break
+            if time.monotonic() - t_dis > 21600:  # 6-hour safety timeout
+                break
+            _cycle_stop_evt.wait(2.0)
+
+        _send({"cmd": "solenoid",  "on": False})  # humidifier off
+        _send({"cmd": "solenoid2", "on": False})  # drier off
+
+        if _cycle_stop_evt.is_set():
+            break
+
+    # Finish ────────────────────────────────────────────────────────────────────
+    _send({"cmd": "solenoid",  "on": False})  # humidifier off
+    _send({"cmd": "solenoid2", "on": False})  # drier off
+    _send({"cmd": "set_sp",    "val": 0})
+    with _cycle_lock:
+        _cycle_status["phase"]        = "stopped" if _cycle_stop_evt.is_set() else "done"
+        _cycle_status["cycle"]        = 0
+        _cycle_status["elapsed_s"]    = 0
+        _cycle_status["delta_t_live"] = 0.0
+    _emit_cycle()
+
+@app.route("/api/cycle/start", methods=["POST"])
+def api_cycle_start():
+    global _cycle_thread
+    if _cycle_thread and _cycle_thread.is_alive():
+        return jsonify({"ok": False, "error": "already running"})
+    body = request.json or {}
+    _cycle_stop_evt.clear()
+    _cycle_thread = threading.Thread(
+        target=_run_cycle,
+        kwargs={
+            "charge_sp":    float(body.get("charge_sp",    120)),
+            "charge_dur_s": int(body.get("charge_dur_s",  7200)),
+            "cool_to":      float(body.get("cool_to",       30)),
+            "delta_t":      float(body.get("delta_t",        3)),
+            "num_cycles":   int(body.get("num_cycles",        1)),
+        },
+        daemon=True,
+    )
+    _cycle_thread.start()
+    return jsonify({"ok": True})
+
+@app.route("/api/cycle/stop", methods=["POST"])
+def api_cycle_stop():
+    _cycle_stop_evt.set()
     return jsonify({"ok": True})
 
 @app.route("/api/ip")
@@ -230,6 +396,22 @@ HTML = r"""<!DOCTYPE html>
   .status-pill.off .dot { background: #4b5563; }
 
   .divider { border: none; border-top: 1px solid #2a2d3a; margin: 12px 0; }
+
+  .cp-box {
+    border: 1px solid #3a3d4a; border-radius: 6px; padding: 6px 13px;
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em;
+    color: #4b5563; background: #252836; transition: color .25s, border-color .25s, box-shadow .25s;
+    white-space: nowrap;
+  }
+  .cp-arrow { color: #3a3d4a; font-size: 0.95rem; user-select: none; }
+
+  #updateBanner {
+    display: none; background: #1c2a1c; border-bottom: 1px solid #22543d;
+    padding: 8px 24px; font-size: 0.82rem; color: #6ee7b7;
+    display: none; align-items: center; gap: 10px;
+  }
+  #updateBanner a { color: #34d399; text-decoration: underline; }
+  #updateBanner button { background: none; border: none; color: #6b7280; cursor: pointer; font-size: 1rem; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -243,6 +425,12 @@ HTML = r"""<!DOCTYPE html>
   <span id="fwBadge" class="badge" style="display:none"></span>
   <div id="connDot" class="dot" title="Serial connection"></div>
 </header>
+
+<div id="updateBanner">
+  <span id="updateMsg"></span>
+  <a id="updateLink" href="https://github.com/brorook/XploraVentures/releases/latest" target="_blank">Download</a>
+  <button onclick="document.getElementById('updateBanner').style.display='none'" title="Dismiss">✕</button>
+</div>
 
 <nav>
   <button class="active" onclick="showTab('reactor')">Accelerated Reactor</button>
@@ -309,9 +497,9 @@ HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Solenoid -->
+    <!-- Humidifier -->
     <div class="card">
-      <h3>Solenoid — MOSFET CH1</h3>
+      <h3>Humidifier — MOSFET CH1</h3>
       <div class="row" style="margin-bottom:14px">
         <span id="solenoidPill" class="status-pill off"><span class="dot"></span> OFF</span>
       </div>
@@ -320,6 +508,87 @@ HTML = r"""<!DOCTYPE html>
         <button class="btn success" onclick="setSolenoid(true)">Open</button>
         <button class="btn danger"  onclick="setSolenoid(false)">Close</button>
       </div>
+    </div>
+
+    <!-- Drier -->
+    <div class="card">
+      <h3>Drier — MOSFET CH2</h3>
+      <div class="row" style="margin-bottom:14px">
+        <span id="solenoid2Pill" class="status-pill off"><span class="dot"></span> OFF</span>
+      </div>
+      <hr class="divider">
+      <div class="row">
+        <button class="btn success" onclick="setSolenoid2(true)">Open</button>
+        <button class="btn danger"  onclick="setSolenoid2(false)">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thermochemical Storage Cycle -->
+  <div class="card" style="margin-bottom:16px">
+    <h3>Thermochemical Storage Cycle
+      <span style="font-size:0.7rem;color:#4b5563;font-weight:400;margin-left:6px">
+        drag <span style="color:#ef4444">●</span> charge temp &nbsp;|&nbsp; drag <span style="color:#3b82f6">●</span> cool-to temp
+      </span>
+    </h3>
+
+    <canvas id="cycleCanvas" style="width:100%;height:170px;border-radius:6px;display:block;cursor:default;margin-bottom:14px;border:1px solid #2a2d3a"></canvas>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px">
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge temp (°C)</div>
+        <input type="number" id="cpChargeTemp" value="120" step="1" min="50" max="200"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge duration (h)</div>
+        <input type="number" id="cpChargeDurH" value="2" step="0.5" min="0.1"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cool to (°C)</div>
+        <input type="number" id="cpCoolTo" value="30" step="1" min="15" max="60"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔT (°C)</div>
+        <input type="number" id="cpDeltaT" value="3" step="0.5" min="0.5" max="20"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cycles</div>
+        <input type="number" id="cpCycles" value="3" step="1" min="1" max="999"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
+    </div>
+
+    <!-- Action + live status row -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn success" onclick="cycleStart()">Start</button>
+      <button class="btn danger"  onclick="cycleStop()">Stop</button>
+      <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
+        <div id="cpHeat" class="cp-box">CHARGE</div>
+        <span class="cp-arrow">→</span>
+        <div id="cpCool" class="cp-box">COOLDOWN</div>
+        <span class="cp-arrow">→</span>
+        <div id="cpSoak" class="cp-box">DISCHARGE</div>
+      </div>
+      <div id="cpSoakBar" style="display:none;flex:1;min-width:140px">
+        <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
+          <span>Charge</span><span id="cpSoakLabel">0m</span>
+        </div>
+        <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:3px;height:6px;overflow:hidden">
+          <div id="cpSoakFill" style="background:#ef4444;height:100%;width:0%;transition:width .9s linear"></div>
+        </div>
+      </div>
+      <div id="cpDischargeDT" style="display:none;font-size:0.85rem;font-weight:600;color:#06b6d4;margin-left:8px"></div>
+      <div id="cpCycleRow" style="display:none;flex:1;min-width:100px">
+        <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
+          <span>Cycles</span><span id="cpCycleLabel"></span>
+        </div>
+        <div id="cpDots" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+      </div>
+      <div id="cpDoneLabel" style="display:none;font-size:0.9rem;font-weight:600;margin-left:auto"></div>
     </div>
   </div>
 
@@ -354,6 +623,12 @@ fetch("/api/ip").then(r => r.json()).then(d => {
 
 const socket = io();
 let connected = false;
+
+socket.on("update_available", d => {
+  document.getElementById("updateMsg").textContent =
+    `Update available: v${d.version} (current v${d.current})`;
+  document.getElementById("updateBanner").style.display = "flex";
+});
 
 const MAX_POINTS = 300;  // ~10 min at 2 s/sample
 
@@ -436,11 +711,17 @@ socket.on("telemetry", d => {
     p.className = "status-pill " + (d.heater ? "on" : "off");
     p.innerHTML = '<span class="dot"></span> ' + (d.heater ? "ON" : "OFF");
   }
-  // Solenoid
+  // Solenoid 1
   if (d.solenoid !== undefined) {
     const p = document.getElementById("solenoidPill");
     p.className = "status-pill " + (d.solenoid ? "on" : "off");
     p.innerHTML = '<span class="dot"></span> ' + (d.solenoid ? "OPEN" : "CLOSED");
+  }
+  // Solenoid 2
+  if (d.solenoid2 !== undefined) {
+    const p = document.getElementById("solenoid2Pill");
+    p.className = "status-pill " + (d.solenoid2 ? "on" : "off");
+    p.innerHTML = '<span class="dot"></span> ' + (d.solenoid2 ? "OPEN" : "CLOSED");
   }
   // Setpoint
   const sp = d.setpoint ?? parseFloat(document.getElementById("spInput").value);
@@ -498,7 +779,253 @@ function sendHysteresis() {
   if (!isNaN(v) && v >= 0) sendCmd({ cmd: "set_hyst", val: v });
 }
 
-function setSolenoid(on) { sendCmd({ cmd: "solenoid", on }); }
+function setSolenoid(on)  { sendCmd({ cmd: "solenoid",  on }); }
+function setSolenoid2(on) { sendCmd({ cmd: "solenoid2", on }); }
+
+// ── Thermochemical Storage Cycle canvas editor ────────────────────────────────
+const CP_COLORS = { Heat: "#ef4444", Cool: "#3b82f6", Soak: "#06b6d4" };
+const CP_MAP    = { charging: "Heat", cooling: "Cool", discharging: "Soak" };
+
+const cp = {
+  cvs: document.getElementById('cycleCanvas'),
+  p: { charge_sp: 120, charge_dur_h: 2, cool_to: 30, delta_t: 3 },
+  drag: null, dragRange: null,
+};
+cp.ctx = cp.cvs.getContext('2d');
+const CPL = { l: 50, r: 16, t: 16, b: 28 };
+
+function cpLayout() {
+  const r = cp.cvs.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cp.cvs.width = r.width * dpr; cp.cvs.height = r.height * dpr;
+  cp.ctx.scale(dpr, dpr);
+  cp.W = r.width; cp.H = r.height;
+  cp.iW = cp.W - CPL.l - CPL.r;
+  cp.iH = cp.H - CPL.t - CPL.b;
+  cp.chargeX    = CPL.l;
+  cp.cooldownX  = CPL.l + cp.iW * 0.40;
+  cp.dischargeX = CPL.l + cp.iW * 0.62;
+  cp.rightX     = cp.W - CPL.r;
+  cp.tempH      = cp.iH * 0.60;
+  cp.solY       = CPL.t + cp.tempH + 5;
+  cp.solH       = cp.iH - cp.tempH - 5;
+}
+
+function cpTY(t, lo, hi) { return CPL.t + cp.tempH * (1 - (t - lo) / (hi - lo)); }
+
+function cpDraw() {
+  const { ctx: c, W, H, chargeX, cooldownX, dischargeX, rightX, tempH, solY, solH, p } = cp;
+  c.clearRect(0, 0, W, H);
+  const lo  = p.cool_to - 8;
+  const hi  = p.charge_sp + 15;
+  const spY = cpTY(p.charge_sp,        lo, hi);
+  const ctY = cpTY(p.cool_to,          lo, hi);
+  const rxY = cpTY(p.cool_to + 22,     lo, hi);  // approx reaction peak (~52°C)
+  const dtY = cpTY(p.cool_to + p.delta_t, lo, hi);
+
+  // Phase backgrounds (temperature area)
+  c.fillStyle='#2a1a1a'; c.fillRect(chargeX, CPL.t, cooldownX-chargeX, tempH);
+  c.fillStyle='#101622'; c.fillRect(cooldownX, CPL.t, dischargeX-cooldownX, tempH);
+  c.fillStyle='#0c1e1e'; c.fillRect(dischargeX, CPL.t, rightX-dischargeX, tempH);
+
+  // Phase labels
+  c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
+  c.fillText(`CHARGE  ${p.charge_dur_h}h`,  (chargeX+cooldownX)/2,    CPL.t+5);
+  c.fillText('COOLDOWN',                     (cooldownX+dischargeX)/2, CPL.t+5);
+  c.fillText('DISCHARGE',                    (dischargeX+rightX)/2,    CPL.t+5);
+
+  // Reference lines
+  c.lineWidth=1; c.setLineDash([5,4]);
+  c.strokeStyle='#ef444438'; c.beginPath(); c.moveTo(chargeX,spY); c.lineTo(rightX,spY); c.stroke();
+  c.strokeStyle='#3b82f638'; c.beginPath(); c.moveTo(chargeX,ctY); c.lineTo(rightX,ctY); c.stroke();
+  c.strokeStyle='#06b6d440'; c.beginPath(); c.moveTo(dischargeX,dtY); c.lineTo(rightX,dtY); c.stroke();
+  c.setLineDash([]);
+
+  // Temperature curve
+  const rampEnd = chargeX + (cooldownX - chargeX) * 0.17;
+  const midDis  = (dischargeX + rightX) / 2;
+  c.strokeStyle='#d1d5db'; c.lineWidth=2;
+  c.beginPath();
+  c.moveTo(chargeX, ctY);
+  c.lineTo(rampEnd, spY);           // quick ramp up to charge temp
+  c.lineTo(cooldownX, spY);         // hold at charge temp
+  c.lineTo(dischargeX, ctY);        // cool down to ambient
+  // Discharge: exothermic reaction bump then back to ambient
+  c.bezierCurveTo(
+    dischargeX + (midDis-dischargeX)*0.35, ctY,
+    midDis - (midDis-dischargeX)*0.25, rxY,
+    midDis, rxY
+  );
+  c.bezierCurveTo(
+    midDis + (rightX-midDis)*0.25, rxY,
+    rightX - (rightX-midDis)*0.35, ctY,
+    rightX, ctY
+  );
+  c.stroke();
+
+  // Y-axis labels
+  c.fillStyle='#9ba3af'; c.textAlign='right'; c.textBaseline='middle'; c.font='10px Segoe UI';
+  c.fillText(`${p.charge_sp}°C`, CPL.l-7, spY);
+  c.fillText(`${p.cool_to}°C`,   CPL.l-7, ctY);
+
+  // Delta-T end-of-discharge threshold label (in discharge zone)
+  c.fillStyle='#06b6d4'; c.textAlign='right'; c.font='9px Segoe UI';
+  c.fillText(`ΔT ${p.delta_t}°`, rightX, dtY-7);
+
+  // Drag handles: red = charge_sp, blue = cool_to
+  c.fillStyle='#ef4444'; c.beginPath(); c.arc(CPL.l-4, spY, 5.5, 0, Math.PI*2); c.fill();
+  c.fillStyle='#3b82f6'; c.beginPath(); c.arc(CPL.l-4, ctY, 5.5, 0, Math.PI*2); c.fill();
+
+  // Solenoid row
+  c.fillStyle='#131520'; c.fillRect(chargeX, solY, rightX-chargeX, solH);
+  // DRY segment (charge + cooldown)
+  c.fillStyle='#1b2030'; c.fillRect(chargeX+1, solY+2, dischargeX-chargeX-2, solH-4);
+  c.fillStyle='#4b5563'; c.textAlign='center'; c.textBaseline='middle'; c.font='9px Segoe UI';
+  c.fillText('DRY AIR  (drier on)', (chargeX+dischargeX)/2, solY+solH/2);
+  // WET segment (discharge)
+  c.fillStyle='#0b3540'; c.fillRect(dischargeX+1, solY+2, rightX-dischargeX-2, solH-4);
+  c.fillStyle='#06b6d4'; c.font='9px Segoe UI';
+  c.fillText('WET AIR  (humidifier on)', (dischargeX+rightX)/2, solY+solH/2);
+  // SOL axis label
+  c.fillStyle='#4b5563'; c.textAlign='right';
+  c.fillText('SOL', CPL.l-8, solY+solH/2);
+
+  // Phase dividers
+  c.strokeStyle='#2a2d3a'; c.lineWidth=1;
+  [cooldownX, dischargeX].forEach(x => {
+    c.beginPath(); c.moveTo(x, CPL.t); c.lineTo(x, solY+solH); c.stroke();
+  });
+}
+
+function cpHit(mx, my) {
+  const lo = cp.p.cool_to-8, hi = cp.p.charge_sp+15;
+  const spY = cpTY(cp.p.charge_sp, lo, hi);
+  const ctY = cpTY(cp.p.cool_to,   lo, hi);
+  if (Math.hypot(mx-(CPL.l-4), my-spY) < 11) return 'sp';
+  if (Math.hypot(mx-(CPL.l-4), my-ctY) < 11) return 'cool';
+  return null;
+}
+
+function cpXY(e) {
+  const r = cp.cvs.getBoundingClientRect(), ev = e.touches ? e.touches[0] : e;
+  return [ev.clientX - r.left, ev.clientY - r.top];
+}
+
+cp.cvs.addEventListener('mousedown', e => {
+  const [mx, my] = cpXY(e);
+  cp.drag = cpHit(mx, my);
+  if (cp.drag) {
+    cp.dragRange = { lo: cp.p.cool_to-8, hi: cp.p.charge_sp+15 };
+    cp.cvs.style.cursor = 'grabbing'; e.preventDefault();
+  }
+});
+
+window.addEventListener('mousemove', e => {
+  if (!cp.drag) {
+    const [mx, my] = cpXY(e);
+    cp.cvs.style.cursor = cpHit(mx, my) ? 'grab' : 'default';
+    return;
+  }
+  const [mx, my] = cpXY(e);
+  const { lo, hi } = cp.dragRange;
+  const t = Math.round(lo + (hi - lo) * (1 - (my - CPL.t) / cp.tempH));
+  if (cp.drag === 'sp')   cp.p.charge_sp = Math.max(cp.p.cool_to + 10, Math.min(200, t));
+  if (cp.drag === 'cool') cp.p.cool_to   = Math.max(15, Math.min(cp.p.charge_sp - 10, t));
+  cpSyncToInputs(); cpDraw();
+});
+
+window.addEventListener('mouseup', () => { cp.drag = null; });
+
+function cpSyncToInputs() {
+  document.getElementById('cpChargeTemp').value  = cp.p.charge_sp;
+  document.getElementById('cpChargeDurH').value  = cp.p.charge_dur_h;
+  document.getElementById('cpCoolTo').value      = cp.p.cool_to;
+  document.getElementById('cpDeltaT').value      = cp.p.delta_t;
+}
+
+function cpSyncFromInputs() {
+  cp.p.charge_sp    = parseFloat(document.getElementById('cpChargeTemp').value) || 120;
+  cp.p.charge_dur_h = parseFloat(document.getElementById('cpChargeDurH').value) || 2;
+  cp.p.cool_to      = parseFloat(document.getElementById('cpCoolTo').value)     || 30;
+  cp.p.delta_t      = parseFloat(document.getElementById('cpDeltaT').value)     || 3;
+  cpDraw();
+}
+
+window.addEventListener('resize', () => { cpLayout(); cpDraw(); });
+cpLayout(); cpDraw();
+
+// ── Live cycle status ─────────────────────────────────────────────────────────
+socket.on("cycle_status", d => {
+  // Phase boxes
+  ["Heat","Cool","Soak"].forEach(n => {
+    const el = document.getElementById("cp" + n);
+    const active = CP_MAP[d.phase] === n;
+    el.style.color       = active ? CP_COLORS[n] : "#4b5563";
+    el.style.borderColor = active ? CP_COLORS[n] : "#3a3d4a";
+    el.style.boxShadow   = active ? `0 0 10px ${CP_COLORS[n]}55` : "none";
+  });
+
+  // Charge progress bar
+  const soakBar = document.getElementById("cpSoakBar");
+  const params  = d.params || {};
+  if (d.phase === "charging" && params.charge_dur_s > 0) {
+    soakBar.style.display = "";
+    const pct = Math.min(100, (d.elapsed_s / params.charge_dur_s) * 100).toFixed(1);
+    document.getElementById("cpSoakFill").style.width = pct + "%";
+    const m = Math.floor(d.elapsed_s / 60), s = d.elapsed_s % 60;
+    const tm = Math.floor(params.charge_dur_s / 60);
+    document.getElementById("cpSoakLabel").textContent = `${m}m ${s}s / ${tm}m`;
+  } else { soakBar.style.display = "none"; }
+
+  // Discharge ΔT live reading
+  const dtEl = document.getElementById("cpDischargeDT");
+  if (d.phase === "discharging") {
+    dtEl.style.display = "";
+    dtEl.textContent   = `Ch3−Ch1 = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
+  } else { dtEl.style.display = "none"; }
+
+  // Cycle dots
+  const cycleRow  = document.getElementById("cpCycleRow");
+  const dotsEl    = document.getElementById("cpDots");
+  const labelEl   = document.getElementById("cpCycleLabel");
+  const doneLabel = document.getElementById("cpDoneLabel");
+  const running   = d.total > 0 && !["idle","done","stopped"].includes(d.phase);
+  if (running || d.phase === "done") {
+    cycleRow.style.display = "";
+    labelEl.textContent = `${Math.max(0, d.cycle-(d.phase==="done"?0:1))} / ${d.total} done`;
+    if (d.total <= 20) {
+      dotsEl.innerHTML = Array.from({length: d.total}, (_, i) => {
+        const done   = d.phase==="done" ? true : i+1 < d.cycle;
+        const active = !done && i+1 === d.cycle;
+        const col    = done ? "#10b981" : active ? "#f59e0b" : "#2a2d3a";
+        return `<div style="width:11px;height:11px;border-radius:50%;background:${col};border:2px solid ${active?"#f59e0b":"transparent"}"></div>`;
+      }).join("");
+    } else {
+      const pct = d.phase==="done" ? 100 : Math.max(0,((d.cycle-1)/d.total)*100).toFixed(1);
+      dotsEl.innerHTML = `<div style="flex:1;background:#1a1d27;border:1px solid #2a2d3a;border-radius:4px;height:9px;overflow:hidden"><div style="background:#10b981;height:100%;width:${pct}%;transition:width .4s;border-radius:4px"></div></div>`;
+    }
+  } else { cycleRow.style.display = "none"; }
+
+  if      (d.phase === "done")    { doneLabel.style.display=""; doneLabel.style.color="#10b981"; doneLabel.textContent="✓ Complete"; }
+  else if (d.phase === "stopped") { doneLabel.style.display=""; doneLabel.style.color="#6b7280"; doneLabel.textContent="⏹ Stopped"; }
+  else                            { doneLabel.style.display="none"; }
+});
+
+async function cycleStart() {
+  const body = {
+    charge_sp:    cp.p.charge_sp,
+    charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
+    cool_to:      cp.p.cool_to,
+    delta_t:      cp.p.delta_t,
+    num_cycles:   parseInt(document.getElementById("cpCycles").value),
+  };
+  const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (!d.ok) alert("Cycle error: " + d.error);
+}
+
+async function cycleStop() {
+  await fetch("/api/cycle/stop", { method:"POST" });
+}
 
 async function logStart() {
   const r = await fetch("/api/log/start", { method:"POST" });
@@ -524,5 +1051,6 @@ def index():
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    threading.Thread(target=_update_checker, daemon=True).start()
     webbrowser.open("http://localhost:8080")
     socketio.run(app, host="0.0.0.0", port=8080, debug=False, allow_unsafe_werkzeug=True)
