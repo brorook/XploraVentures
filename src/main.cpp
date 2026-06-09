@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <SensirionI2cSht4x.h>
 
 #include "pin_definitions.h"
 
@@ -11,19 +12,21 @@
 #define TELEMETRY_MS    2000
 
 // ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
-static float g_setpoint   = 30.0f;
+static float g_setpoint   = 0.0f;
 static float g_hysteresis = 0.5f;
 
 // ── Sensor state ──────────────────────────────────────────────────────────────
 static float g_t1 = 0.0f, g_h1 = 0.0f;   // SHT45 Channel 1 (mux 0)
 static float g_t3 = 0.0f, g_h3 = 0.0f;   // SHT45 Channel 3 (mux 2)
-static bool  g_heater   = false;           // MOSFET CH0 — coil heater
-static bool  g_solenoid = false;           // MOSFET CH1 — solenoid
+static bool  g_heater    = false;           // MOSFET CH0 — coil heater
+static bool  g_solenoid  = false;           // MOSFET CH1 — solenoid 1
+static bool  g_solenoid2 = false;           // MOSFET CH2 — solenoid 2
 
 // ── Misc ──────────────────────────────────────────────────────────────────────
-static String    g_rxBuf;
-static uint8_t   g_pcf_p0 = 0x00;
-static uint8_t   g_pcf_p1 = 0x00;
+static String             g_rxBuf;
+static uint8_t            g_pcf_p0 = 0x00;
+static uint8_t            g_pcf_p1 = 0x00;
+static SensirionI2cSht4x  g_sht4x;
 
 // =============================================================================
 // PCF8575 / MOSFET
@@ -36,16 +39,18 @@ static void pcfFlush() {
 }
 
 static void setMosfet(uint8_t ch, bool on) {
-    struct { uint8_t *port; uint8_t mask; } lut[2] = {
+    struct { uint8_t *port; uint8_t mask; } lut[3] = {
         { &g_pcf_p0, MOSFET_CH0_P0 },
         { &g_pcf_p0, MOSFET_CH1_P0 },
+        { &g_pcf_p0, MOSFET_CH2_P0 },
     };
-    if (ch > 1) return;
+    if (ch > 2) return;
     if (on) *lut[ch].port |=  lut[ch].mask;
     else    *lut[ch].port &= ~lut[ch].mask;
     pcfFlush();
-    if (ch == 0) g_heater   = on;
-    if (ch == 1) g_solenoid = on;
+    if (ch == 0) g_heater    = on;
+    if (ch == 1) g_solenoid  = on;
+    if (ch == 2) g_solenoid2 = on;
 }
 
 // =============================================================================
@@ -68,24 +73,18 @@ static void muxDeselect() {
 // SHT45
 // =============================================================================
 
-static bool sht45Read(float &temp, float &hum) {
-    Wire.beginTransmission(SHT45_ADDR);
-    Wire.write(0xFD);
-    if (Wire.endTransmission() != 0) { temp = 0.0f; hum = 0.0f; return false; }
-    delay(10);
-    Wire.requestFrom((uint8_t)SHT45_ADDR, (uint8_t)6);
-    if (Wire.available() < 6) { temp = 0.0f; hum = 0.0f; return false; }
-    uint8_t b[6]; for (auto &x : b) x = Wire.read();
-    uint16_t t_raw = ((uint16_t)b[0] << 8) | b[1];
-    uint16_t h_raw = ((uint16_t)b[3] << 8) | b[4];
-    temp = -45.0f + 175.0f * (t_raw / 65535.0f);
-    hum  = constrain(100.0f * (h_raw / 65535.0f), 0.0f, 100.0f);
+static bool sht4xRead(float &temp, float &hum) {
+    float t, h;
+    uint16_t err = g_sht4x.measureHighPrecision(t, h);
+    if (err) { temp = 0.0f; hum = 0.0f; return false; }
+    temp = t;
+    hum  = constrain(h, 0.0f, 100.0f);
     return true;
 }
 
 static void readSensors() {
-    muxSelect(0); delay(2); sht45Read(g_t1, g_h1);
-    muxSelect(2); delay(2); sht45Read(g_t3, g_h3);
+    muxSelect(0); delay(2); sht4xRead(g_t1, g_h1);
+    muxSelect(2); delay(2); sht4xRead(g_t3, g_h3);
     muxDeselect();
 }
 
@@ -110,6 +109,7 @@ static void emitTelemetry() {
     doc["sht3"]["h"]  = roundf(g_h3 * 10) / 10.0f;
     doc["heater"]     = g_heater;
     doc["solenoid"]   = g_solenoid;
+    doc["solenoid2"]  = g_solenoid2;
     doc["setpoint"]   = roundf(g_setpoint   * 10) / 10.0f;
     doc["hysteresis"] = roundf(g_hysteresis * 10) / 10.0f;
     doc["fw"]         = FW_VERSION;
@@ -127,9 +127,10 @@ static void handleCommand(const String &line) {
     const char *cmd = doc["cmd"];
     if (!cmd) return;
 
-    if      (strcmp(cmd, "set_sp")   == 0) g_setpoint   = doc["val"].as<float>();
+    if      (strcmp(cmd, "set_sp")    == 0) g_setpoint   = doc["val"].as<float>();
     else if (strcmp(cmd, "set_hyst") == 0) g_hysteresis = max(0.0f, doc["val"].as<float>());
     else if (strcmp(cmd, "solenoid") == 0) setMosfet(1, doc["on"].as<bool>());
+    else if (strcmp(cmd, "solenoid2")== 0) setMosfet(2, doc["on"].as<bool>());
 }
 
 static void checkSerial() {
@@ -154,6 +155,7 @@ void setup() {
 
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
+    g_sht4x.begin(Wire, SHT45_ADDR);
 
     pinMode(LED_HB,   OUTPUT);
     pinMode(LED_SD,   OUTPUT); digitalWrite(LED_SD,   LOW);

@@ -171,11 +171,12 @@ def _emit_cycle():
         s = dict(_cycle_status)
     socketio.emit("cycle_status", s)
 
-def _run_cycle(charge_sp, charge_dur_s, cool_to, delta_t, num_cycles):
+def _run_cycle(charge_sp, charge_dur_s, cool_to, delta_t, num_cycles, start_phase="charge"):
     """Thermochemical storage cycle.
     CHARGE : drier on + heater → dehydrate material at charge_sp for charge_dur_s seconds.
     COOLDOWN: heater off, drier on, wait until Ch3 ≤ cool_to.
     DISCHARGE: humidifier on → exothermic adsorption reaction → wait until Ch3−Ch1 ≤ delta_t.
+    start_phase: "charge" (default) or "discharge" — skip charge+cooldown on first iteration.
     """
     global _last_t1, _last_t3
 
@@ -192,43 +193,48 @@ def _run_cycle(charge_sp, charge_dur_s, cool_to, delta_t, num_cycles):
             "params": {"charge_dur_s": charge_dur_s, "delta_t": delta_t},
         })
 
+    skip_charge = (start_phase == "discharge")
+
     for n in range(1, num_cycles + 1):
         if _cycle_stop_evt.is_set():
             break
 
-        # CHARGE ──────────────────────────────────────────────────────────────
-        # Drier on; heat outlet (Ch3) to charge_sp for charge_dur_s seconds.
-        set_phase("charging", n)
-        _send({"cmd": "solenoid2", "on": True})   # drier on
-        _send({"cmd": "solenoid",  "on": False})  # humidifier off
-        _send({"cmd": "set_sp",    "val": charge_sp})
-        t0 = time.monotonic()
-        while not _cycle_stop_evt.is_set():
-            elapsed = time.monotonic() - t0
-            with _cycle_lock:
-                _cycle_status["elapsed_s"] = int(elapsed)
-            _emit_cycle()
-            if elapsed >= charge_dur_s:
+        if not skip_charge:
+            # CHARGE ──────────────────────────────────────────────────────────────
+            # Drier on; heat outlet (Ch3) to charge_sp for charge_dur_s seconds.
+            set_phase("charging", n)
+            _send({"cmd": "solenoid2", "on": True})   # drier on
+            _send({"cmd": "solenoid",  "on": False})  # humidifier off
+            _send({"cmd": "set_sp",    "val": charge_sp})
+            t0 = time.monotonic()
+            while not _cycle_stop_evt.is_set():
+                elapsed = time.monotonic() - t0
+                with _cycle_lock:
+                    _cycle_status["elapsed_s"] = int(elapsed)
+                _emit_cycle()
+                if elapsed >= charge_dur_s:
+                    break
+                _cycle_stop_evt.wait(2.0)
+
+            if _cycle_stop_evt.is_set():
                 break
-            _cycle_stop_evt.wait(2.0)
 
-        if _cycle_stop_evt.is_set():
-            break
+            # COOLDOWN ────────────────────────────────────────────────────────────
+            # Turn heater off; keep drier on; wait until Ch3 ≤ cool_to.
+            set_phase("cooling", n)
+            _send({"cmd": "solenoid2", "on": True})   # drier on
+            _send({"cmd": "solenoid",  "on": False})  # humidifier off
+            _send({"cmd": "set_sp",    "val": 0})
+            while not _cycle_stop_evt.is_set():
+                t3 = _last_t3
+                if t3 is not None and t3 <= cool_to:
+                    break
+                _cycle_stop_evt.wait(2.0)
 
-        # COOLDOWN ────────────────────────────────────────────────────────────
-        # Turn heater off; keep drier on; wait until Ch3 ≤ cool_to.
-        set_phase("cooling", n)
-        _send({"cmd": "solenoid2", "on": True})   # drier on
-        _send({"cmd": "solenoid",  "on": False})  # humidifier off
-        _send({"cmd": "set_sp",    "val": 0})
-        while not _cycle_stop_evt.is_set():
-            t3 = _last_t3
-            if t3 is not None and t3 <= cool_to:
+            if _cycle_stop_evt.is_set():
                 break
-            _cycle_stop_evt.wait(2.0)
 
-        if _cycle_stop_evt.is_set():
-            break
+        skip_charge = False  # only applies to first iteration
 
         # DISCHARGE ────────────────────────────────────────────────────────────
         # Switch to humidifier; wait for adsorption reaction to peak then finish.
@@ -286,6 +292,7 @@ def api_cycle_start():
             "cool_to":      float(body.get("cool_to",       30)),
             "delta_t":      float(body.get("delta_t",        3)),
             "num_cycles":   int(body.get("num_cycles",        1)),
+            "start_phase":  body.get("start_phase", "charge"),
         },
         daemon=True,
     )
@@ -487,7 +494,7 @@ HTML = r"""<!DOCTYPE html>
       <hr class="divider">
       <div class="row">
         <label>Setpoint (°C)</label>
-        <input type="number" id="spInput" value="30" step="0.5" min="-40" max="150" onkeydown="if(event.key==='Enter') sendSetpoint()">
+        <input type="number" id="spInput" value="0" step="0.5" min="-40" max="150" onkeydown="if(event.key==='Enter') sendSetpoint()">
         <button class="btn" onclick="sendSetpoint()">Set</button>
       </div>
       <div class="row">
@@ -565,6 +572,10 @@ HTML = r"""<!DOCTYPE html>
     <!-- Action + live status row -->
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn success" onclick="cycleStart()">Start</button>
+      <select id="cpStartPhase" style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem">
+        <option value="charge">from Charge</option>
+        <option value="discharge">from Discharge</option>
+      </select>
       <button class="btn danger"  onclick="cycleStop()">Stop</button>
       <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
         <div id="cpHeat" class="cp-box">CHARGE</div>
@@ -1017,6 +1028,7 @@ async function cycleStart() {
     cool_to:      cp.p.cool_to,
     delta_t:      cp.p.delta_t,
     num_cycles:   parseInt(document.getElementById("cpCycles").value),
+    start_phase:  document.getElementById("cpStartPhase").value,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
