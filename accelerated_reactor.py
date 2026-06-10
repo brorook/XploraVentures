@@ -1,5 +1,5 @@
 """
-Accelerated Reactor Dashboard
+Accelerated Reactor Dashboard — entry point.
 Flask + SocketIO dashboard for the AcceleratedReactor firmware.
 Two SHT45 sensors (Ch1, Ch3), coil heater on MOSFET CH0, humidifier on CH1, drier on CH2.
 """
@@ -7,35 +7,108 @@ Two SHT45 sensors (Ch1, Ch3), coil heater on MOSFET CH0, humidifier on CH1, drie
 __version__ = "1.0.0"
 _RELEASES_API = "https://api.github.com/repos/brorook/XploraVentures/releases/latest"
 
-import serial
-import serial.tools.list_ports
-import threading
-import json
-import csv
 import os
-import datetime
+import json
 import time
+import threading
 import webbrowser
 import urllib.request
 
-from flask import Flask, request, jsonify, send_file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from flask import Flask, render_template
 from flask_socketio import SocketIO
 
-app = Flask(__name__)
+from serial_manager import SerialManager
+from cycle_runner import CycleRunner
+from logger import CsvLogger
+from routes import create_blueprint
+
+# ─── App ──────────────────────────────────────────────────────────────────────
+
+app = Flask(__name__, template_folder="templates")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-_ser       = None
-_ser_lock  = threading.Lock()
-_rx_thread = None
-_log_file  = None
-_log_writer= None
-_log_path  = None
-_log_lock  = threading.Lock()
+# ─── Subsystems ───────────────────────────────────────────────────────────────
 
-# ─── Update check ────────────────────────────────────────────────────────────
+serial_mgr = SerialManager()
+csv_logger = CsvLogger()
+
+db = None
+_sb_url = os.getenv("SUPABASE_URL")
+_sb_key = os.getenv("SUPABASE_ANON_KEY")
+if _sb_url and _sb_key:
+    try:
+        from db import SupabaseDB
+        db = SupabaseDB(_sb_url, _sb_key)
+        print(f"Supabase connected: {_sb_url}")
+    except Exception as e:
+        print(f"Supabase init failed: {e}")
+
+# ─── Cycle DB tracking ────────────────────────────────────────────────────────
+
+# Shared with routes.py so /api/cycle/start can write the run_id
+run_id_holder = {"id": None, "last_phase": "idle"}
+
+def _on_cycle_status(status: dict):
+    socketio.emit("cycle_status", status)
+    if db is None:
+        return
+    phase = status["phase"]
+    if phase == run_id_holder["last_phase"]:
+        return
+    run_id_holder["last_phase"] = phase
+    run_id = run_id_holder["id"]
+    if phase not in ("idle", "done", "stopped"):
+        threading.Thread(
+            target=db.insert_cycle_event,
+            args=(run_id, phase, status.get("cycle", 0), status.get("elapsed_s", 0)),
+            daemon=True,
+        ).start()
+    elif phase in ("done", "stopped"):
+        threading.Thread(target=db.end_cycle_run, args=(run_id, phase), daemon=True).start()
+        run_id_holder["id"] = None
+
+cycle_runner = CycleRunner(send_fn=serial_mgr.send, on_status=_on_cycle_status)
+
+# ─── Serial telemetry ─────────────────────────────────────────────────────────
+
+_last_db_telemetry = 0.0
+
+def _on_telemetry(data: dict):
+    global _last_db_telemetry
+    socketio.emit("telemetry", data)
+    csv_logger.log_row(data)
+    if "sht1" in data:
+        cycle_runner.last_t1 = data["sht1"].get("t")
+    if "sht3" in data:
+        cycle_runner.last_t3 = data["sht3"].get("t")
+    if db:
+        now = time.monotonic()
+        if now - _last_db_telemetry >= 10.0:  # throttle to ~6/min to stay within Supabase free tier
+            _last_db_telemetry = now
+            threading.Thread(target=db.insert_telemetry, args=(data,), daemon=True).start()
+
+serial_mgr.add_listener(_on_telemetry)
+
+# ─── Routes ───────────────────────────────────────────────────────────────────
+
+app.register_blueprint(
+    create_blueprint(serial_mgr, cycle_runner, csv_logger, db, run_id_holder)
+)
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+# ─── Update check ─────────────────────────────────────────────────────────────
 
 def _update_checker():
-    time.sleep(4)  # let the server fully start before checking
+    time.sleep(4)
     try:
         req = urllib.request.Request(_RELEASES_API, headers={"User-Agent": "AcceleratedReactor"})
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -44,1021 +117,6 @@ def _update_checker():
             socketio.emit("update_available", {"version": tag, "current": __version__})
     except Exception:
         pass
-
-# ─── Cycle runner state ───────────────────────────────────────────────────────
-_last_t1        = None   # SHT45 Ch1 — inlet temperature
-_last_t3        = None   # SHT45 Ch3 — outlet temperature (heater sensor)
-_cycle_thread   = None
-_cycle_stop_evt = threading.Event()
-_cycle_status   = {"phase": "idle", "cycle": 0, "total": 0, "elapsed_s": 0, "params": {}}
-_cycle_lock     = threading.Lock()
-
-# ─── Serial ───────────────────────────────────────────────────────────────────
-
-def _serial_reader():
-    global _ser
-    while True:
-        with _ser_lock:
-            s = _ser
-        if s is None:
-            break
-        try:
-            line = s.readline().decode("utf-8", errors="ignore").strip()
-        except Exception:
-            break
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        socketio.emit("telemetry", data)
-        _log_row(data)
-        global _last_t1, _last_t3
-        if "sht1" in data:
-            _last_t1 = data["sht1"].get("t")
-        if "sht3" in data:
-            _last_t3 = data["sht3"].get("t")
-
-def _send(obj):
-    with _ser_lock:
-        if _ser and _ser.is_open:
-            _ser.write((json.dumps(obj) + "\n").encode())
-
-# ─── CSV Logging ──────────────────────────────────────────────────────────────
-
-def _log_row(data):
-    with _log_lock:
-        if _log_writer is None:
-            return
-        _log_writer.writerow([
-            datetime.datetime.now().isoformat(),
-            data.get("sht1", {}).get("t", ""),
-            data.get("sht1", {}).get("h", ""),
-            data.get("sht3", {}).get("t", ""),
-            data.get("sht3", {}).get("h", ""),
-            int(data.get("heater",    False)),
-            int(data.get("solenoid",  False)),
-            int(data.get("solenoid2", False)),
-            data.get("setpoint", ""),
-        ])
-        _log_file.flush()
-
-# ─── API ──────────────────────────────────────────────────────────────────────
-
-@app.route("/api/ports")
-def api_ports():
-    ports = [p.device for p in serial.tools.list_ports.comports()]
-    return jsonify(ports)
-
-@app.route("/api/connect", methods=["POST"])
-def api_connect():
-    global _ser, _rx_thread
-    body = request.json or {}
-    port = body.get("port", "")
-    baud = int(body.get("baud", 115200))
-    with _ser_lock:
-        if _ser and _ser.is_open:
-            _ser.close()
-        try:
-            _ser = serial.Serial(port, baud, timeout=1)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
-    _rx_thread = threading.Thread(target=_serial_reader, daemon=True)
-    _rx_thread.start()
-    return jsonify({"ok": True})
-
-@app.route("/api/disconnect", methods=["POST"])
-def api_disconnect():
-    global _ser
-    with _ser_lock:
-        if _ser:
-            _ser.close()
-            _ser = None
-    return jsonify({"ok": True})
-
-@app.route("/api/command", methods=["POST"])
-def api_command():
-    _send(request.json or {})
-    return jsonify({"ok": True})
-
-@app.route("/api/log/start", methods=["POST"])
-def api_log_start():
-    global _log_file, _log_writer, _log_path
-    with _log_lock:
-        if _log_writer:
-            return jsonify({"ok": False, "error": "already logging"})
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        _log_path = f"accel_reactor_{ts}.csv"
-        _log_file = open(_log_path, "w", newline="")
-        _log_writer = csv.writer(_log_file)
-        _log_writer.writerow(["timestamp","ch1_t","ch1_h","ch3_t","ch3_h","heater","drier","humidifier","setpoint"])
-    return jsonify({"ok": True, "file": _log_path})
-
-@app.route("/api/log/stop", methods=["POST"])
-def api_log_stop():
-    global _log_file, _log_writer, _log_path
-    with _log_lock:
-        if _log_file:
-            _log_file.close()
-        _log_file = _log_writer = None
-    return jsonify({"ok": True})
-
-# ─── Cycle runner ─────────────────────────────────────────────────────────────
-
-def _emit_cycle():
-    with _cycle_lock:
-        s = dict(_cycle_status)
-    socketio.emit("cycle_status", s)
-
-def _run_cycle(charge_sp, charge_dur_s, cool_to, delta_t, num_cycles, start_phase="charge"):
-    """Thermochemical storage cycle.
-    CHARGE : drier on + heater → dehydrate material at charge_sp for charge_dur_s seconds.
-    COOLDOWN: heater off, drier on, wait until Ch3 ≤ cool_to.
-    DISCHARGE: humidifier on → exothermic adsorption reaction → wait until Ch3−Ch1 ≤ delta_t.
-    start_phase: "charge" (default) or "discharge" — skip charge+cooldown on first iteration.
-    """
-    global _last_t1, _last_t3
-
-    def set_phase(phase, cycle=None):
-        with _cycle_lock:
-            _cycle_status["phase"] = phase
-            if cycle is not None:
-                _cycle_status["cycle"] = cycle
-        _emit_cycle()
-
-    with _cycle_lock:
-        _cycle_status.update({
-            "total": num_cycles, "elapsed_s": 0, "delta_t_live": 0.0,
-            "params": {"charge_dur_s": charge_dur_s, "delta_t": delta_t},
-        })
-
-    skip_charge = (start_phase == "discharge")
-
-    for n in range(1, num_cycles + 1):
-        if _cycle_stop_evt.is_set():
-            break
-
-        if not skip_charge:
-            # CHARGE ──────────────────────────────────────────────────────────────
-            # Drier on; heat outlet (Ch3) to charge_sp for charge_dur_s seconds.
-            set_phase("charging", n)
-            _send({"cmd": "solenoid2", "on": True})   # drier on
-            _send({"cmd": "solenoid",  "on": False})  # humidifier off
-            _send({"cmd": "set_sp",    "val": charge_sp})
-            t0 = time.monotonic()
-            while not _cycle_stop_evt.is_set():
-                elapsed = time.monotonic() - t0
-                with _cycle_lock:
-                    _cycle_status["elapsed_s"] = int(elapsed)
-                _emit_cycle()
-                if elapsed >= charge_dur_s:
-                    break
-                _cycle_stop_evt.wait(2.0)
-
-            if _cycle_stop_evt.is_set():
-                break
-
-            # COOLDOWN ────────────────────────────────────────────────────────────
-            # Turn heater off; keep drier on; wait until Ch3 ≤ cool_to.
-            set_phase("cooling", n)
-            _send({"cmd": "solenoid2", "on": True})   # drier on
-            _send({"cmd": "solenoid",  "on": False})  # humidifier off
-            _send({"cmd": "set_sp",    "val": 0})
-            while not _cycle_stop_evt.is_set():
-                t3 = _last_t3
-                if t3 is not None and t3 <= cool_to:
-                    break
-                _cycle_stop_evt.wait(2.0)
-
-            if _cycle_stop_evt.is_set():
-                break
-
-        skip_charge = False  # only applies to first iteration
-
-        # DISCHARGE ────────────────────────────────────────────────────────────
-        # Switch to humidifier; wait for adsorption reaction to peak then finish.
-        # Reaction end: peaked AND Ch3−Ch1 drops back to ≤ delta_t.
-        set_phase("discharging", n)
-        _send({"cmd": "solenoid",  "on": True})   # humidifier on
-        _send({"cmd": "solenoid2", "on": False})  # drier off
-        peaked  = False
-        t_dis   = time.monotonic()
-        while not _cycle_stop_evt.is_set():
-            t3   = _last_t3
-            t1   = _last_t1
-            diff = round(t3 - t1, 1) if (t3 is not None and t1 is not None) else 0.0
-            with _cycle_lock:
-                _cycle_status["elapsed_s"]   = int(time.monotonic() - t_dis)
-                _cycle_status["delta_t_live"] = diff
-            _emit_cycle()
-            if diff > delta_t * 2:          # reaction clearly started
-                peaked = True
-            if peaked and diff <= delta_t:  # temperature differential collapsed → done
-                break
-            if time.monotonic() - t_dis > 21600:  # 6-hour safety timeout
-                break
-            _cycle_stop_evt.wait(2.0)
-
-        _send({"cmd": "solenoid",  "on": False})  # humidifier off
-        _send({"cmd": "solenoid2", "on": False})  # drier off
-
-        if _cycle_stop_evt.is_set():
-            break
-
-    # Finish ────────────────────────────────────────────────────────────────────
-    _send({"cmd": "solenoid",  "on": False})  # humidifier off
-    _send({"cmd": "solenoid2", "on": False})  # drier off
-    _send({"cmd": "set_sp",    "val": 0})
-    with _cycle_lock:
-        _cycle_status["phase"]        = "stopped" if _cycle_stop_evt.is_set() else "done"
-        _cycle_status["cycle"]        = 0
-        _cycle_status["elapsed_s"]    = 0
-        _cycle_status["delta_t_live"] = 0.0
-    _emit_cycle()
-
-@app.route("/api/cycle/start", methods=["POST"])
-def api_cycle_start():
-    global _cycle_thread
-    if _cycle_thread and _cycle_thread.is_alive():
-        return jsonify({"ok": False, "error": "already running"})
-    body = request.json or {}
-    _cycle_stop_evt.clear()
-    _cycle_thread = threading.Thread(
-        target=_run_cycle,
-        kwargs={
-            "charge_sp":    float(body.get("charge_sp",    120)),
-            "charge_dur_s": int(body.get("charge_dur_s",  7200)),
-            "cool_to":      float(body.get("cool_to",       30)),
-            "delta_t":      float(body.get("delta_t",        3)),
-            "num_cycles":   int(body.get("num_cycles",        1)),
-            "start_phase":  body.get("start_phase", "charge"),
-        },
-        daemon=True,
-    )
-    _cycle_thread.start()
-    return jsonify({"ok": True})
-
-@app.route("/api/cycle/stop", methods=["POST"])
-def api_cycle_stop():
-    _cycle_stop_evt.set()
-    return jsonify({"ok": True})
-
-@app.route("/api/ip")
-def api_ip():
-    import socket as _socket
-    try:
-        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        ip = "127.0.0.1"
-    return jsonify({"ip": ip, "port": 8080})
-
-@app.route("/api/log/download")
-def api_log_download():
-    if _log_path and os.path.exists(_log_path):
-        return send_file(_log_path, as_attachment=True)
-    return jsonify({"error": "no log"}), 404
-
-# ─── HTML ─────────────────────────────────────────────────────────────────────
-
-HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Accelerated Reactor</title>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0f1117; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
-
-  header {
-    background: #1a1d27; border-bottom: 1px solid #2a2d3a;
-    padding: 14px 24px; display: flex; align-items: center; gap: 16px;
-  }
-  header h1 { font-size: 1.1rem; font-weight: 600; color: #fff; }
-  .badge { background: #252836; border: 1px solid #3a3d4a; border-radius: 4px;
-           padding: 2px 8px; font-size: 0.72rem; color: #9ba3af; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: #4b5563; margin-left: auto; }
-  .dot.connected { background: #10b981; }
-
-  nav { background: #1a1d27; border-bottom: 1px solid #2a2d3a; padding: 0 24px; display: flex; }
-  nav button {
-    background: none; border: none; color: #9ba3af; padding: 12px 18px;
-    font-size: 0.85rem; cursor: pointer; border-bottom: 2px solid transparent;
-  }
-  nav button.active { color: #fff; border-bottom-color: #3b82f6; }
-
-  .tab { display: none; padding: 24px; max-width: 1100px; margin: 0 auto; }
-  .tab.active { display: block; }
-
-  .grid { display: grid; gap: 16px; }
-  .grid-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-  .grid-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-
-  .card {
-    background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 18px;
-  }
-  .card h3 { font-size: 0.8rem; color: #6b7280; text-transform: uppercase;
-             letter-spacing: 0.05em; margin-bottom: 12px; }
-
-  .sensor-val { font-size: 2.4rem; font-weight: 700; color: #f3f4f6; line-height: 1; }
-  .sensor-sub { font-size: 0.85rem; color: #9ba3af; margin-top: 6px; }
-  .sensor-unit { font-size: 1rem; color: #6b7280; }
-
-  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-  .row:last-child { margin-bottom: 0; }
-
-  label { font-size: 0.82rem; color: #9ba3af; min-width: 90px; }
-  select, input[type=number], input[type=text] {
-    background: #252836; border: 1px solid #3a3d4a; border-radius: 6px;
-    color: #e0e0e0; padding: 6px 10px; font-size: 0.85rem; flex: 1;
-  }
-  select:focus, input:focus { outline: none; border-color: #3b82f6; }
-
-  button.btn {
-    background: #3b82f6; border: none; border-radius: 6px; color: #fff;
-    padding: 7px 16px; font-size: 0.85rem; cursor: pointer; white-space: nowrap;
-  }
-  button.btn:hover { background: #2563eb; }
-  button.btn.danger { background: #ef4444; }
-  button.btn.danger:hover { background: #dc2626; }
-  button.btn.success { background: #10b981; }
-  button.btn.success:hover { background: #059669; }
-  button.btn.ghost {
-    background: #252836; border: 1px solid #3a3d4a; color: #e0e0e0;
-  }
-  button.btn.ghost:hover { background: #2f3340; }
-
-  .status-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: #252836; border: 1px solid #3a3d4a; border-radius: 20px;
-    padding: 4px 12px; font-size: 0.8rem;
-  }
-  .status-pill .dot { margin-left: 0; }
-  .status-pill.on .dot { background: #10b981; }
-  .status-pill.off .dot { background: #4b5563; }
-
-  .divider { border: none; border-top: 1px solid #2a2d3a; margin: 12px 0; }
-
-  .cp-box {
-    border: 1px solid #3a3d4a; border-radius: 6px; padding: 6px 13px;
-    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em;
-    color: #4b5563; background: #252836; transition: color .25s, border-color .25s, box-shadow .25s;
-    white-space: nowrap;
-  }
-  .cp-arrow { color: #3a3d4a; font-size: 0.95rem; user-select: none; }
-
-  #updateBanner {
-    display: none; background: #1c2a1c; border-bottom: 1px solid #22543d;
-    padding: 8px 24px; font-size: 0.82rem; color: #6ee7b7;
-    display: none; align-items: center; gap: 10px;
-  }
-  #updateBanner a { color: #34d399; text-decoration: underline; }
-  #updateBanner button { background: none; border: none; color: #6b7280; cursor: pointer; font-size: 1rem; margin-left: auto; }
-</style>
-</head>
-<body>
-
-<header>
-  <div style="display:flex; flex-direction:column; gap:2px;">
-    <span id="ipBadge" style="font-size:0.68rem; color:#6b7280; letter-spacing:0.03em;"></span>
-    <h1>XploraVentures</h1>
-  </div>
-  <span class="badge">Accelerated Reactor</span>
-  <span id="fwBadge" class="badge" style="display:none"></span>
-  <div id="connDot" class="dot" title="Serial connection"></div>
-</header>
-
-<div id="updateBanner">
-  <span id="updateMsg"></span>
-  <a id="updateLink" href="https://github.com/brorook/XploraVentures/releases/latest" target="_blank">Download</a>
-  <button onclick="document.getElementById('updateBanner').style.display='none'" title="Dismiss">✕</button>
-</div>
-
-<nav>
-  <button class="active" onclick="showTab('reactor')">Accelerated Reactor</button>
-</nav>
-
-<!-- ── Accelerated Reactor Tab ──────────────────────────────────────────── -->
-<div id="tab-reactor" class="tab active">
-
-  <!-- Connection -->
-  <div class="card" style="margin-bottom:16px">
-    <h3>Serial Connection</h3>
-    <div class="row">
-      <label>Port</label>
-      <select id="portSel"></select>
-      <button class="btn ghost" onclick="refreshPorts()">Refresh</button>
-    </div>
-    <div class="row">
-      <label>Baud</label>
-      <select id="baudSel">
-        <option value="115200" selected>115200</option>
-        <option value="9600">9600</option>
-      </select>
-    </div>
-    <div class="row" style="margin-top:4px">
-      <button class="btn" id="connectBtn" onclick="connect()">Connect</button>
-      <button class="btn ghost" onclick="disconnect()">Disconnect</button>
-    </div>
-  </div>
-
-  <!-- Sensors -->
-  <div class="grid grid-2" style="margin-bottom:16px">
-    <!-- Channel 1 -->
-    <div class="card">
-      <h3>Channel 1 — Temp / Humidity</h3>
-      <div class="sensor-val" id="ch1T">--<span class="sensor-unit"> °C</span></div>
-      <div class="sensor-sub" id="ch1H">Humidity: -- %</div>
-    </div>
-    <!-- Channel 3 -->
-    <div class="card">
-      <h3>Channel 3 — Temp / Humidity <span style="color:#f59e0b;font-size:0.7rem">(heater sensor)</span></h3>
-      <div class="sensor-val" id="ch3T">--<span class="sensor-unit"> °C</span></div>
-      <div class="sensor-sub" id="ch3H">Humidity: -- %</div>
-    </div>
-  </div>
-
-  <!-- Controls -->
-  <div class="grid grid-2" style="margin-bottom:16px">
-    <!-- Heater -->
-    <div class="card">
-      <h3>Coil Heater — MOSFET CH0</h3>
-      <div class="row" style="margin-bottom:14px">
-        <span id="heaterPill" class="status-pill off"><span class="dot"></span> OFF</span>
-      </div>
-      <hr class="divider">
-      <div class="row">
-        <label>Setpoint (°C)</label>
-        <input type="number" id="spInput" value="0" step="0.5" min="-40" max="150" onkeydown="if(event.key==='Enter') sendSetpoint()">
-        <button class="btn" onclick="sendSetpoint()">Set</button>
-      </div>
-      <div class="row">
-        <label>Hysteresis (°C)</label>
-        <input type="number" id="hystInput" value="0.5" step="0.1" min="0" max="10" onkeydown="if(event.key==='Enter') sendHysteresis()">
-        <button class="btn ghost" onclick="sendHysteresis()">Set</button>
-      </div>
-    </div>
-
-    <!-- Humidifier -->
-    <div class="card">
-      <h3>Humidifier — MOSFET CH1</h3>
-      <div class="row" style="margin-bottom:14px">
-        <span id="solenoidPill" class="status-pill off"><span class="dot"></span> OFF</span>
-      </div>
-      <hr class="divider">
-      <div class="row">
-        <button class="btn success" onclick="setSolenoid(true)">Open</button>
-        <button class="btn danger"  onclick="setSolenoid(false)">Close</button>
-      </div>
-    </div>
-
-    <!-- Drier -->
-    <div class="card">
-      <h3>Drier — MOSFET CH2</h3>
-      <div class="row" style="margin-bottom:14px">
-        <span id="solenoid2Pill" class="status-pill off"><span class="dot"></span> OFF</span>
-      </div>
-      <hr class="divider">
-      <div class="row">
-        <button class="btn success" onclick="setSolenoid2(true)">Open</button>
-        <button class="btn danger"  onclick="setSolenoid2(false)">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Thermochemical Storage Cycle -->
-  <div class="card" style="margin-bottom:16px">
-    <h3>Thermochemical Storage Cycle
-      <span style="font-size:0.7rem;color:#4b5563;font-weight:400;margin-left:6px">
-        drag <span style="color:#ef4444">●</span> charge temp &nbsp;|&nbsp; drag <span style="color:#3b82f6">●</span> cool-to temp
-      </span>
-    </h3>
-
-    <canvas id="cycleCanvas" style="width:100%;height:170px;border-radius:6px;display:block;cursor:default;margin-bottom:14px;border:1px solid #2a2d3a"></canvas>
-
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px">
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge temp (°C)</div>
-        <input type="number" id="cpChargeTemp" value="120" step="1" min="50" max="200"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge duration (h)</div>
-        <input type="number" id="cpChargeDurH" value="2" step="0.5" min="0.1"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cool to (°C)</div>
-        <input type="number" id="cpCoolTo" value="30" step="1" min="15" max="60"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔT (°C)</div>
-        <input type="number" id="cpDeltaT" value="3" step="0.5" min="0.5" max="20"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cycles</div>
-        <input type="number" id="cpCycles" value="3" step="1" min="1" max="999"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
-      </div>
-    </div>
-
-    <!-- Action + live status row -->
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button class="btn success" onclick="cycleStart()">Start</button>
-      <select id="cpStartPhase" style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem">
-        <option value="charge">from Charge</option>
-        <option value="discharge">from Discharge</option>
-      </select>
-      <button class="btn danger"  onclick="cycleStop()">Stop</button>
-      <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
-        <div id="cpHeat" class="cp-box">CHARGE</div>
-        <span class="cp-arrow">→</span>
-        <div id="cpCool" class="cp-box">COOLDOWN</div>
-        <span class="cp-arrow">→</span>
-        <div id="cpSoak" class="cp-box">DISCHARGE</div>
-      </div>
-      <div id="cpSoakBar" style="display:none;flex:1;min-width:140px">
-        <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
-          <span>Charge</span><span id="cpSoakLabel">0m</span>
-        </div>
-        <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:3px;height:6px;overflow:hidden">
-          <div id="cpSoakFill" style="background:#ef4444;height:100%;width:0%;transition:width .9s linear"></div>
-        </div>
-      </div>
-      <div id="cpDischargeDT" style="display:none;font-size:0.85rem;font-weight:600;color:#06b6d4;margin-left:8px"></div>
-      <div id="cpCycleRow" style="display:none;flex:1;min-width:100px">
-        <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
-          <span>Cycles</span><span id="cpCycleLabel"></span>
-        </div>
-        <div id="cpDots" style="display:flex;gap:4px;flex-wrap:wrap"></div>
-      </div>
-      <div id="cpDoneLabel" style="display:none;font-size:0.9rem;font-weight:600;margin-left:auto"></div>
-    </div>
-  </div>
-
-  <!-- Logging -->
-  <div class="card" style="margin-bottom:16px">
-    <h3>PC Logging</h3>
-    <div class="row">
-      <button class="btn" id="logStartBtn" onclick="logStart()">Start Log</button>
-      <button class="btn ghost" onclick="logStop()">Stop</button>
-      <button class="btn ghost" onclick="window.open('/api/log/download')">Download CSV</button>
-      <span id="logStatus" style="font-size:0.8rem;color:#6b7280;margin-left:8px"></span>
-    </div>
-  </div>
-
-  <!-- Graph -->
-  <div class="card">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <h3 style="margin:0">Live History</h3>
-      <button class="btn ghost" onclick="clearChart()" style="padding:4px 10px;font-size:0.75rem">Clear</button>
-    </div>
-    <div style="position:relative;height:280px">
-      <canvas id="liveChart"></canvas>
-    </div>
-  </div>
-
-</div>
-
-<script>
-fetch("/api/ip").then(r => r.json()).then(d => {
-  document.getElementById("ipBadge").textContent = d.ip + ":" + d.port;
-});
-
-const socket = io();
-let connected = false;
-
-socket.on("update_available", d => {
-  document.getElementById("updateMsg").textContent =
-    `Update available: v${d.version} (current v${d.current})`;
-  document.getElementById("updateBanner").style.display = "flex";
-});
-
-const MAX_POINTS = 300;  // ~10 min at 2 s/sample
-
-// ── Chart setup ──────────────────────────────────────────────────────────────
-const ctx = document.getElementById("liveChart").getContext("2d");
-const chart = new Chart(ctx, {
-  type: "line",
-  data: {
-    labels: [],
-    datasets: [
-      { label: "Ch1 Temp (°C)",  yAxisID: "yT", data: [], borderColor: "#3b82f6", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
-      { label: "Ch3 Temp (°C)",  yAxisID: "yT", data: [], borderColor: "#f59e0b", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
-      { label: "Setpoint (°C)",  yAxisID: "yT", data: [], borderColor: "#ef4444", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, borderDash: [6,3], tension: 0 },
-      { label: "Ch1 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#60a5fa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
-      { label: "Ch3 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#fbbf24", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
-    ]
-  },
-  options: {
-    animation: false,
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: "index", intersect: false },
-    plugins: {
-      legend: { labels: { color: "#9ba3af", boxWidth: 24, font: { size: 11 } } },
-      tooltip: { backgroundColor: "#1a1d27", borderColor: "#3a3d4a", borderWidth: 1, titleColor: "#e0e0e0", bodyColor: "#9ba3af" }
-    },
-    scales: {
-      x: { ticks: { color: "#6b7280", maxTicksLimit: 8, font: { size: 10 } }, grid: { color: "#2a2d3a" } },
-      yT: {
-        position: "left", title: { display: true, text: "Temperature (°C)", color: "#9ba3af", font: { size: 11 } },
-        ticks: { color: "#9ba3af", font: { size: 10 } }, grid: { color: "#2a2d3a" }
-      },
-      yH: {
-        position: "right", title: { display: true, text: "Humidity (%)", color: "#9ba3af", font: { size: 11 } },
-        ticks: { color: "#9ba3af", font: { size: 10 } }, grid: { drawOnChartArea: false },
-        min: 0, max: 100
-      }
-    }
-  }
-});
-
-function pushChart(t1, h1, t3, h3, sp) {
-  const ts = new Date().toLocaleTimeString();
-  const ds = chart.data.datasets;
-  const labels = chart.data.labels;
-  labels.push(ts);
-  ds[0].data.push(t1);
-  ds[1].data.push(t3);
-  ds[2].data.push(sp);
-  ds[3].data.push(h1);
-  ds[4].data.push(h3);
-  if (labels.length > MAX_POINTS) {
-    labels.shift();
-    ds.forEach(d => d.data.shift());
-  }
-  chart.update("none");
-}
-
-function clearChart() {
-  chart.data.labels = [];
-  chart.data.datasets.forEach(d => d.data = []);
-  chart.update("none");
-}
-
-// ── Telemetry ─────────────────────────────────────────────────────────────────
-socket.on("telemetry", d => {
-  // Channel 1
-  if (d.sht1 !== undefined) {
-    document.getElementById("ch1T").innerHTML = d.sht1.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
-    document.getElementById("ch1H").textContent = "Humidity: " + d.sht1.h.toFixed(1) + " %";
-  }
-  // Channel 3
-  if (d.sht3 !== undefined) {
-    document.getElementById("ch3T").innerHTML = d.sht3.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
-    document.getElementById("ch3H").textContent = "Humidity: " + d.sht3.h.toFixed(1) + " %";
-  }
-  // Heater + duty
-  if (d.heater !== undefined) {
-    const p = document.getElementById("heaterPill");
-    p.className = "status-pill " + (d.heater ? "on" : "off");
-    p.innerHTML = '<span class="dot"></span> ' + (d.heater ? "ON" : "OFF");
-  }
-  // Solenoid 1
-  if (d.solenoid !== undefined) {
-    const p = document.getElementById("solenoidPill");
-    p.className = "status-pill " + (d.solenoid ? "on" : "off");
-    p.innerHTML = '<span class="dot"></span> ' + (d.solenoid ? "OPEN" : "CLOSED");
-  }
-  // Solenoid 2
-  if (d.solenoid2 !== undefined) {
-    const p = document.getElementById("solenoid2Pill");
-    p.className = "status-pill " + (d.solenoid2 ? "on" : "off");
-    p.innerHTML = '<span class="dot"></span> ' + (d.solenoid2 ? "OPEN" : "CLOSED");
-  }
-  // Setpoint
-  const sp = d.setpoint ?? parseFloat(document.getElementById("spInput").value);
-  if (d.setpoint !== undefined && document.getElementById("spInput") !== document.activeElement)
-    document.getElementById("spInput").value = d.setpoint;
-  // Hysteresis
-  if (d.hysteresis !== undefined && document.getElementById("hystInput") !== document.activeElement)
-    document.getElementById("hystInput").value = d.hysteresis;
-  // FW
-  if (d.fw) {
-    const b = document.getElementById("fwBadge");
-    b.textContent = "FW " + d.fw; b.style.display = "";
-  }
-  // Push to chart whenever we have both sensors
-  if (d.sht1 !== undefined && d.sht3 !== undefined)
-    pushChart(d.sht1.t, d.sht1.h, d.sht3.t, d.sht3.h, sp);
-});
-
-async function refreshPorts() {
-  const r = await fetch("/api/ports"); const ports = await r.json();
-  const sel = document.getElementById("portSel");
-  sel.innerHTML = ports.map(p => `<option value="${p}">${p}</option>`).join("") || '<option value="">No ports</option>';
-}
-
-async function connect() {
-  const port = document.getElementById("portSel").value;
-  const baud = document.getElementById("baudSel").value;
-  const r = await fetch("/api/connect", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({port, baud}) });
-  const d = await r.json();
-  if (d.ok) {
-    connected = true;
-    document.getElementById("connDot").className = "dot connected";
-  } else {
-    alert("Connect failed: " + d.error);
-  }
-}
-
-async function disconnect() {
-  await fetch("/api/disconnect", { method:"POST" });
-  connected = false;
-  document.getElementById("connDot").className = "dot";
-}
-
-async function sendCmd(obj) {
-  await fetch("/api/command", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(obj) });
-}
-
-function sendSetpoint() {
-  const v = parseFloat(document.getElementById("spInput").value);
-  if (!isNaN(v)) sendCmd({ cmd: "set_sp", val: v });
-}
-
-function sendHysteresis() {
-  const v = parseFloat(document.getElementById("hystInput").value);
-  if (!isNaN(v) && v >= 0) sendCmd({ cmd: "set_hyst", val: v });
-}
-
-function setSolenoid(on)  { sendCmd({ cmd: "solenoid",  on }); }
-function setSolenoid2(on) { sendCmd({ cmd: "solenoid2", on }); }
-
-// ── Thermochemical Storage Cycle canvas editor ────────────────────────────────
-const CP_COLORS = { Heat: "#ef4444", Cool: "#3b82f6", Soak: "#06b6d4" };
-const CP_MAP    = { charging: "Heat", cooling: "Cool", discharging: "Soak" };
-
-const cp = {
-  cvs: document.getElementById('cycleCanvas'),
-  p: { charge_sp: 120, charge_dur_h: 2, cool_to: 30, delta_t: 3 },
-  drag: null, dragRange: null,
-};
-cp.ctx = cp.cvs.getContext('2d');
-const CPL = { l: 50, r: 16, t: 16, b: 28 };
-
-function cpLayout() {
-  const r = cp.cvs.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-  cp.cvs.width = r.width * dpr; cp.cvs.height = r.height * dpr;
-  cp.ctx.scale(dpr, dpr);
-  cp.W = r.width; cp.H = r.height;
-  cp.iW = cp.W - CPL.l - CPL.r;
-  cp.iH = cp.H - CPL.t - CPL.b;
-  cp.chargeX    = CPL.l;
-  cp.cooldownX  = CPL.l + cp.iW * 0.40;
-  cp.dischargeX = CPL.l + cp.iW * 0.62;
-  cp.rightX     = cp.W - CPL.r;
-  cp.tempH      = cp.iH * 0.60;
-  cp.solY       = CPL.t + cp.tempH + 5;
-  cp.solH       = cp.iH - cp.tempH - 5;
-}
-
-function cpTY(t, lo, hi) { return CPL.t + cp.tempH * (1 - (t - lo) / (hi - lo)); }
-
-function cpDraw() {
-  const { ctx: c, W, H, chargeX, cooldownX, dischargeX, rightX, tempH, solY, solH, p } = cp;
-  c.clearRect(0, 0, W, H);
-  const lo  = p.cool_to - 8;
-  const hi  = p.charge_sp + 15;
-  const spY = cpTY(p.charge_sp,        lo, hi);
-  const ctY = cpTY(p.cool_to,          lo, hi);
-  const rxY = cpTY(p.cool_to + 22,     lo, hi);  // approx reaction peak (~52°C)
-  const dtY = cpTY(p.cool_to + p.delta_t, lo, hi);
-
-  // Phase backgrounds (temperature area)
-  c.fillStyle='#2a1a1a'; c.fillRect(chargeX, CPL.t, cooldownX-chargeX, tempH);
-  c.fillStyle='#101622'; c.fillRect(cooldownX, CPL.t, dischargeX-cooldownX, tempH);
-  c.fillStyle='#0c1e1e'; c.fillRect(dischargeX, CPL.t, rightX-dischargeX, tempH);
-
-  // Phase labels
-  c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
-  c.fillText(`CHARGE  ${p.charge_dur_h}h`,  (chargeX+cooldownX)/2,    CPL.t+5);
-  c.fillText('COOLDOWN',                     (cooldownX+dischargeX)/2, CPL.t+5);
-  c.fillText('DISCHARGE',                    (dischargeX+rightX)/2,    CPL.t+5);
-
-  // Reference lines
-  c.lineWidth=1; c.setLineDash([5,4]);
-  c.strokeStyle='#ef444438'; c.beginPath(); c.moveTo(chargeX,spY); c.lineTo(rightX,spY); c.stroke();
-  c.strokeStyle='#3b82f638'; c.beginPath(); c.moveTo(chargeX,ctY); c.lineTo(rightX,ctY); c.stroke();
-  c.strokeStyle='#06b6d440'; c.beginPath(); c.moveTo(dischargeX,dtY); c.lineTo(rightX,dtY); c.stroke();
-  c.setLineDash([]);
-
-  // Temperature curve
-  const rampEnd = chargeX + (cooldownX - chargeX) * 0.17;
-  const midDis  = (dischargeX + rightX) / 2;
-  c.strokeStyle='#d1d5db'; c.lineWidth=2;
-  c.beginPath();
-  c.moveTo(chargeX, ctY);
-  c.lineTo(rampEnd, spY);           // quick ramp up to charge temp
-  c.lineTo(cooldownX, spY);         // hold at charge temp
-  c.lineTo(dischargeX, ctY);        // cool down to ambient
-  // Discharge: exothermic reaction bump then back to ambient
-  c.bezierCurveTo(
-    dischargeX + (midDis-dischargeX)*0.35, ctY,
-    midDis - (midDis-dischargeX)*0.25, rxY,
-    midDis, rxY
-  );
-  c.bezierCurveTo(
-    midDis + (rightX-midDis)*0.25, rxY,
-    rightX - (rightX-midDis)*0.35, ctY,
-    rightX, ctY
-  );
-  c.stroke();
-
-  // Y-axis labels
-  c.fillStyle='#9ba3af'; c.textAlign='right'; c.textBaseline='middle'; c.font='10px Segoe UI';
-  c.fillText(`${p.charge_sp}°C`, CPL.l-7, spY);
-  c.fillText(`${p.cool_to}°C`,   CPL.l-7, ctY);
-
-  // Delta-T end-of-discharge threshold label (in discharge zone)
-  c.fillStyle='#06b6d4'; c.textAlign='right'; c.font='9px Segoe UI';
-  c.fillText(`ΔT ${p.delta_t}°`, rightX, dtY-7);
-
-  // Drag handles: red = charge_sp, blue = cool_to
-  c.fillStyle='#ef4444'; c.beginPath(); c.arc(CPL.l-4, spY, 5.5, 0, Math.PI*2); c.fill();
-  c.fillStyle='#3b82f6'; c.beginPath(); c.arc(CPL.l-4, ctY, 5.5, 0, Math.PI*2); c.fill();
-
-  // Solenoid row
-  c.fillStyle='#131520'; c.fillRect(chargeX, solY, rightX-chargeX, solH);
-  // DRY segment (charge + cooldown)
-  c.fillStyle='#1b2030'; c.fillRect(chargeX+1, solY+2, dischargeX-chargeX-2, solH-4);
-  c.fillStyle='#4b5563'; c.textAlign='center'; c.textBaseline='middle'; c.font='9px Segoe UI';
-  c.fillText('DRY AIR  (drier on)', (chargeX+dischargeX)/2, solY+solH/2);
-  // WET segment (discharge)
-  c.fillStyle='#0b3540'; c.fillRect(dischargeX+1, solY+2, rightX-dischargeX-2, solH-4);
-  c.fillStyle='#06b6d4'; c.font='9px Segoe UI';
-  c.fillText('WET AIR  (humidifier on)', (dischargeX+rightX)/2, solY+solH/2);
-  // SOL axis label
-  c.fillStyle='#4b5563'; c.textAlign='right';
-  c.fillText('SOL', CPL.l-8, solY+solH/2);
-
-  // Phase dividers
-  c.strokeStyle='#2a2d3a'; c.lineWidth=1;
-  [cooldownX, dischargeX].forEach(x => {
-    c.beginPath(); c.moveTo(x, CPL.t); c.lineTo(x, solY+solH); c.stroke();
-  });
-}
-
-function cpHit(mx, my) {
-  const lo = cp.p.cool_to-8, hi = cp.p.charge_sp+15;
-  const spY = cpTY(cp.p.charge_sp, lo, hi);
-  const ctY = cpTY(cp.p.cool_to,   lo, hi);
-  if (Math.hypot(mx-(CPL.l-4), my-spY) < 11) return 'sp';
-  if (Math.hypot(mx-(CPL.l-4), my-ctY) < 11) return 'cool';
-  return null;
-}
-
-function cpXY(e) {
-  const r = cp.cvs.getBoundingClientRect(), ev = e.touches ? e.touches[0] : e;
-  return [ev.clientX - r.left, ev.clientY - r.top];
-}
-
-cp.cvs.addEventListener('mousedown', e => {
-  const [mx, my] = cpXY(e);
-  cp.drag = cpHit(mx, my);
-  if (cp.drag) {
-    cp.dragRange = { lo: cp.p.cool_to-8, hi: cp.p.charge_sp+15 };
-    cp.cvs.style.cursor = 'grabbing'; e.preventDefault();
-  }
-});
-
-window.addEventListener('mousemove', e => {
-  if (!cp.drag) {
-    const [mx, my] = cpXY(e);
-    cp.cvs.style.cursor = cpHit(mx, my) ? 'grab' : 'default';
-    return;
-  }
-  const [mx, my] = cpXY(e);
-  const { lo, hi } = cp.dragRange;
-  const t = Math.round(lo + (hi - lo) * (1 - (my - CPL.t) / cp.tempH));
-  if (cp.drag === 'sp')   cp.p.charge_sp = Math.max(cp.p.cool_to + 10, Math.min(200, t));
-  if (cp.drag === 'cool') cp.p.cool_to   = Math.max(15, Math.min(cp.p.charge_sp - 10, t));
-  cpSyncToInputs(); cpDraw();
-});
-
-window.addEventListener('mouseup', () => { cp.drag = null; });
-
-function cpSyncToInputs() {
-  document.getElementById('cpChargeTemp').value  = cp.p.charge_sp;
-  document.getElementById('cpChargeDurH').value  = cp.p.charge_dur_h;
-  document.getElementById('cpCoolTo').value      = cp.p.cool_to;
-  document.getElementById('cpDeltaT').value      = cp.p.delta_t;
-}
-
-function cpSyncFromInputs() {
-  cp.p.charge_sp    = parseFloat(document.getElementById('cpChargeTemp').value) || 120;
-  cp.p.charge_dur_h = parseFloat(document.getElementById('cpChargeDurH').value) || 2;
-  cp.p.cool_to      = parseFloat(document.getElementById('cpCoolTo').value)     || 30;
-  cp.p.delta_t      = parseFloat(document.getElementById('cpDeltaT').value)     || 3;
-  cpDraw();
-}
-
-window.addEventListener('resize', () => { cpLayout(); cpDraw(); });
-cpLayout(); cpDraw();
-
-// ── Live cycle status ─────────────────────────────────────────────────────────
-socket.on("cycle_status", d => {
-  // Phase boxes
-  ["Heat","Cool","Soak"].forEach(n => {
-    const el = document.getElementById("cp" + n);
-    const active = CP_MAP[d.phase] === n;
-    el.style.color       = active ? CP_COLORS[n] : "#4b5563";
-    el.style.borderColor = active ? CP_COLORS[n] : "#3a3d4a";
-    el.style.boxShadow   = active ? `0 0 10px ${CP_COLORS[n]}55` : "none";
-  });
-
-  // Charge progress bar
-  const soakBar = document.getElementById("cpSoakBar");
-  const params  = d.params || {};
-  if (d.phase === "charging" && params.charge_dur_s > 0) {
-    soakBar.style.display = "";
-    const pct = Math.min(100, (d.elapsed_s / params.charge_dur_s) * 100).toFixed(1);
-    document.getElementById("cpSoakFill").style.width = pct + "%";
-    const m = Math.floor(d.elapsed_s / 60), s = d.elapsed_s % 60;
-    const tm = Math.floor(params.charge_dur_s / 60);
-    document.getElementById("cpSoakLabel").textContent = `${m}m ${s}s / ${tm}m`;
-  } else { soakBar.style.display = "none"; }
-
-  // Discharge ΔT live reading
-  const dtEl = document.getElementById("cpDischargeDT");
-  if (d.phase === "discharging") {
-    dtEl.style.display = "";
-    dtEl.textContent   = `Ch3−Ch1 = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
-  } else { dtEl.style.display = "none"; }
-
-  // Cycle dots
-  const cycleRow  = document.getElementById("cpCycleRow");
-  const dotsEl    = document.getElementById("cpDots");
-  const labelEl   = document.getElementById("cpCycleLabel");
-  const doneLabel = document.getElementById("cpDoneLabel");
-  const running   = d.total > 0 && !["idle","done","stopped"].includes(d.phase);
-  if (running || d.phase === "done") {
-    cycleRow.style.display = "";
-    labelEl.textContent = `${Math.max(0, d.cycle-(d.phase==="done"?0:1))} / ${d.total} done`;
-    if (d.total <= 20) {
-      dotsEl.innerHTML = Array.from({length: d.total}, (_, i) => {
-        const done   = d.phase==="done" ? true : i+1 < d.cycle;
-        const active = !done && i+1 === d.cycle;
-        const col    = done ? "#10b981" : active ? "#f59e0b" : "#2a2d3a";
-        return `<div style="width:11px;height:11px;border-radius:50%;background:${col};border:2px solid ${active?"#f59e0b":"transparent"}"></div>`;
-      }).join("");
-    } else {
-      const pct = d.phase==="done" ? 100 : Math.max(0,((d.cycle-1)/d.total)*100).toFixed(1);
-      dotsEl.innerHTML = `<div style="flex:1;background:#1a1d27;border:1px solid #2a2d3a;border-radius:4px;height:9px;overflow:hidden"><div style="background:#10b981;height:100%;width:${pct}%;transition:width .4s;border-radius:4px"></div></div>`;
-    }
-  } else { cycleRow.style.display = "none"; }
-
-  if      (d.phase === "done")    { doneLabel.style.display=""; doneLabel.style.color="#10b981"; doneLabel.textContent="✓ Complete"; }
-  else if (d.phase === "stopped") { doneLabel.style.display=""; doneLabel.style.color="#6b7280"; doneLabel.textContent="⏹ Stopped"; }
-  else                            { doneLabel.style.display="none"; }
-});
-
-async function cycleStart() {
-  const body = {
-    charge_sp:    cp.p.charge_sp,
-    charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
-    cool_to:      cp.p.cool_to,
-    delta_t:      cp.p.delta_t,
-    num_cycles:   parseInt(document.getElementById("cpCycles").value),
-    start_phase:  document.getElementById("cpStartPhase").value,
-  };
-  const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-  const d = await r.json();
-  if (!d.ok) alert("Cycle error: " + d.error);
-}
-
-async function cycleStop() {
-  await fetch("/api/cycle/stop", { method:"POST" });
-}
-
-async function logStart() {
-  const r = await fetch("/api/log/start", { method:"POST" });
-  const d = await r.json();
-  if (d.ok) document.getElementById("logStatus").textContent = "Logging: " + d.file;
-}
-
-async function logStop() {
-  await fetch("/api/log/stop", { method:"POST" });
-  document.getElementById("logStatus").textContent = "Stopped.";
-}
-
-refreshPorts();
-</script>
-</body>
-</html>
-"""
-
-@app.route("/")
-def index():
-    return HTML
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 

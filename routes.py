@@ -1,0 +1,107 @@
+import os
+import socket as _socket
+
+from flask import Blueprint, request, jsonify, send_file
+
+from serial_manager import SerialManager
+from cycle_runner import CycleRunner
+from logger import CsvLogger
+
+
+def create_blueprint(
+    serial_mgr: SerialManager,
+    cycle_runner: CycleRunner,
+    csv_logger: CsvLogger,
+    db,               # SupabaseDB | None
+    run_id_holder: dict,  # {"id": None, "last_phase": "idle"} — shared with main
+) -> Blueprint:
+    bp = Blueprint("api", __name__)
+
+    # ── Serial ────────────────────────────────────────────────────────────────
+
+    @bp.route("/api/ports")
+    def api_ports():
+        return jsonify(serial_mgr.list_ports())
+
+    @bp.route("/api/connect", methods=["POST"])
+    def api_connect():
+        body = request.json or {}
+        port = body.get("port", "")
+        baud = int(body.get("baud", 115200))
+        try:
+            serial_mgr.connect(port, baud)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)})
+
+    @bp.route("/api/disconnect", methods=["POST"])
+    def api_disconnect():
+        serial_mgr.disconnect()
+        return jsonify({"ok": True})
+
+    @bp.route("/api/command", methods=["POST"])
+    def api_command():
+        serial_mgr.send(request.json or {})
+        return jsonify({"ok": True})
+
+    # ── CSV Logging ───────────────────────────────────────────────────────────
+
+    @bp.route("/api/log/start", methods=["POST"])
+    def api_log_start():
+        ok, result = csv_logger.start()
+        if ok:
+            return jsonify({"ok": True, "file": result})
+        return jsonify({"ok": False, "error": result})
+
+    @bp.route("/api/log/stop", methods=["POST"])
+    def api_log_stop():
+        csv_logger.stop()
+        return jsonify({"ok": True})
+
+    @bp.route("/api/log/download")
+    def api_log_download():
+        path = csv_logger.path
+        if path and os.path.exists(path):
+            return send_file(path, as_attachment=True)
+        return jsonify({"error": "no log"}), 404
+
+    # ── Cycle ─────────────────────────────────────────────────────────────────
+
+    @bp.route("/api/cycle/start", methods=["POST"])
+    def api_cycle_start():
+        body = request.json or {}
+        params = {
+            "charge_sp":    float(body.get("charge_sp",    120)),
+            "charge_dur_s": int(body.get("charge_dur_s",  7200)),
+            "cool_to":      float(body.get("cool_to",       30)),
+            "delta_t":      float(body.get("delta_t",        3)),
+            "num_cycles":   int(body.get("num_cycles",        1)),
+            "start_phase":  body.get("start_phase", "charge"),
+        }
+        if db:
+            run_id_holder["id"] = db.start_cycle_run(params)
+            run_id_holder["last_phase"] = "idle"
+        ok, err = cycle_runner.start(**params)
+        if not ok:
+            return jsonify({"ok": False, "error": err})
+        return jsonify({"ok": True})
+
+    @bp.route("/api/cycle/stop", methods=["POST"])
+    def api_cycle_stop():
+        cycle_runner.stop()
+        return jsonify({"ok": True})
+
+    # ── Misc ──────────────────────────────────────────────────────────────────
+
+    @bp.route("/api/ip")
+    def api_ip():
+        try:
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            ip = "127.0.0.1"
+        return jsonify({"ip": ip, "port": 8080})
+
+    return bp
