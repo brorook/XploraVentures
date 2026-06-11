@@ -148,12 +148,14 @@
       <h3>Channel 1 — Temp / Humidity</h3>
       <div class="sensor-val" id="ch1T">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="ch1H">Humidity: -- %</div>
+      <div class="sensor-sub" id="ch1AH" style="margin-top:3px;color:#60a5fa">Abs. humidity: -- g/m³</div>
     </div>
     <!-- Channel 3 -->
     <div class="card">
       <h3>Channel 3 — Temp / Humidity <span style="color:#f59e0b;font-size:0.7rem">(heater sensor)</span></h3>
       <div class="sensor-val" id="ch3T">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="ch3H">Humidity: -- %</div>
+      <div class="sensor-sub" id="ch3AH" style="margin-top:3px;color:#fbbf24">Abs. humidity: -- g/m³</div>
     </div>
   </div>
 
@@ -164,6 +166,10 @@
       <h3>Coil Heater — MOSFET CH0</h3>
       <div class="row" style="margin-bottom:14px">
         <span id="heaterPill" class="status-pill off"><span class="dot"></span> OFF</span>
+      </div>
+      <div class="row">
+        <button class="btn success" onclick="setHeater(true)">On</button>
+        <button class="btn danger"  onclick="setHeater(false)">Off</button>
       </div>
       <hr class="divider">
       <div class="row">
@@ -294,6 +300,25 @@
       <h3 style="margin:0">Live History</h3>
       <button class="btn ghost" onclick="clearChart()" style="padding:4px 10px;font-size:0.75rem">Clear</button>
     </div>
+    <!-- Axis range controls -->
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;align-items:center">
+      <span style="font-size:0.75rem;color:#6b7280;white-space:nowrap">Temp Y:</span>
+      <input type="number" id="yTMin" placeholder="auto" step="1"
+        style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:72px"
+        oninput="applyAxisRanges()">
+      <span style="font-size:0.72rem;color:#4b5563">–</span>
+      <input type="number" id="yTMax" placeholder="auto" step="1"
+        style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:72px"
+        oninput="applyAxisRanges()">
+      <span style="font-size:0.75rem;color:#6b7280;white-space:nowrap;margin-left:10px">Humidity Y:</span>
+      <input type="number" id="yHMin" placeholder="auto" step="1" min="0" max="100"
+        style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
+        oninput="applyAxisRanges()">
+      <span style="font-size:0.72rem;color:#4b5563">–</span>
+      <input type="number" id="yHMax" placeholder="auto" step="1" min="0" max="100"
+        style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
+        oninput="applyAxisRanges()">
+    </div>
     <div style="position:relative;height:280px">
       <canvas id="liveChart"></canvas>
     </div>
@@ -384,11 +409,13 @@ socket.on("telemetry", d => {
   if (d.sht1 !== undefined) {
     document.getElementById("ch1T").innerHTML = d.sht1.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
     document.getElementById("ch1H").textContent = "Humidity: " + d.sht1.h.toFixed(1) + " %";
+    document.getElementById("ch1AH").textContent = "Abs. humidity: " + absHumidity(d.sht1.t, d.sht1.h).toFixed(2) + " g/m³";
   }
   // Channel 3
   if (d.sht3 !== undefined) {
     document.getElementById("ch3T").innerHTML = d.sht3.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
     document.getElementById("ch3H").textContent = "Humidity: " + d.sht3.h.toFixed(1) + " %";
+    document.getElementById("ch3AH").textContent = "Abs. humidity: " + absHumidity(d.sht3.t, d.sht3.h).toFixed(2) + " g/m³";
   }
   // Heater + duty
   if (d.heater !== undefined) {
@@ -466,6 +493,21 @@ function sendHysteresis() {
 
 function setSolenoid(on)  { sendCmd({ cmd: "solenoid",  on }); }
 function setSolenoid2(on) { sendCmd({ cmd: "solenoid2", on }); }
+function setHeater(on)    { sendCmd({ cmd: "heater",    on }); }
+
+function absHumidity(t, rh) {
+  // Magnus formula: AH (g/m³) = 216.7 × (RH/100 × 6.112 × e^(17.67T/(T+243.5))) / (T+273.15)
+  return 216.7 * (rh / 100 * 6.112 * Math.exp(17.67 * t / (t + 243.5))) / (t + 273.15);
+}
+
+function applyAxisRanges() {
+  const toNum = id => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? undefined : v; };
+  const yT = chart.options.scales.yT;
+  const yH = chart.options.scales.yH;
+  yT.min = toNum("yTMin"); yT.max = toNum("yTMax");
+  yH.min = toNum("yHMin") ?? 0; yH.max = toNum("yHMax") ?? 100;
+  chart.update("none");
+}
 
 // ── Thermochemical Storage Cycle canvas editor ────────────────────────────────
 const CP_COLORS = { Heat: "#ef4444", Cool: "#3b82f6", Soak: "#06b6d4" };

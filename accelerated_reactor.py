@@ -33,6 +33,35 @@ from routes import create_blueprint
 app = Flask(__name__, template_folder="templates")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# ─── Shutdown on tab close ────────────────────────────────────────────────────
+
+_shutdown_timer = None
+_shutdown_timer_lock = threading.Lock()
+
+def _schedule_shutdown():
+    global _shutdown_timer
+    def _do_shutdown():
+        os._exit(0)
+    with _shutdown_timer_lock:
+        _shutdown_timer = threading.Timer(3.0, _do_shutdown)
+        _shutdown_timer.daemon = True
+        _shutdown_timer.start()
+
+def _cancel_shutdown():
+    global _shutdown_timer
+    with _shutdown_timer_lock:
+        if _shutdown_timer is not None:
+            _shutdown_timer.cancel()
+            _shutdown_timer = None
+
+@socketio.on("connect")
+def on_connect():
+    _cancel_shutdown()
+
+@socketio.on("disconnect")
+def on_disconnect():
+    _schedule_shutdown()
+
 # ─── Subsystems ───────────────────────────────────────────────────────────────
 
 serial_mgr = SerialManager()
