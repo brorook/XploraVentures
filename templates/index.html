@@ -318,6 +318,10 @@
       <input type="number" id="yHMax" placeholder="auto" step="1" min="0" max="100"
         style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
         oninput="applyAxisRanges()">
+      <span style="font-size:0.75rem;color:#6b7280;white-space:nowrap;margin-left:10px">Window (min):</span>
+      <input type="number" id="xWindow" placeholder="10" step="1" min="1" value="10"
+        style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
+        oninput="applyAxisRanges()">
     </div>
     <div style="position:relative;height:280px">
       <canvas id="liveChart"></canvas>
@@ -340,7 +344,7 @@ socket.on("update_available", d => {
   document.getElementById("updateBanner").style.display = "flex";
 });
 
-const MAX_POINTS = 300;  // ~10 min at 2 s/sample
+let MAX_POINTS = 300;  // ~10 min at 2 s/sample
 
 // ── Chart setup ──────────────────────────────────────────────────────────────
 const ctx = document.getElementById("liveChart").getContext("2d");
@@ -506,6 +510,8 @@ function applyAxisRanges() {
   const yH = chart.options.scales.yH;
   yT.min = toNum("yTMin"); yT.max = toNum("yTMax");
   yH.min = toNum("yHMin") ?? 0; yH.max = toNum("yHMax") ?? 100;
+  const mins = parseFloat(document.getElementById("xWindow").value);
+  if (!isNaN(mins) && mins > 0) MAX_POINTS = Math.round(mins * 30);
   chart.update("none");
 }
 
