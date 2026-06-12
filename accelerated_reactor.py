@@ -37,6 +37,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 _shutdown_timer = None
 _shutdown_timer_lock = threading.Lock()
+_client_count = 0
 
 def _schedule_shutdown():
     global _shutdown_timer
@@ -56,11 +57,19 @@ def _cancel_shutdown():
 
 @socketio.on("connect")
 def on_connect():
+    global _client_count
+    with _shutdown_timer_lock:
+        _client_count += 1
     _cancel_shutdown()
 
 @socketio.on("disconnect")
 def on_disconnect():
-    _schedule_shutdown()
+    global _client_count
+    with _shutdown_timer_lock:
+        _client_count = max(0, _client_count - 1)
+        remaining = _client_count
+    if remaining == 0:
+        _schedule_shutdown()
 
 # ─── Subsystems ───────────────────────────────────────────────────────────────
 

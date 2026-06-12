@@ -46,8 +46,8 @@ class CsvLogger:
                 data.get("sht3", {}).get("t", ""),
                 data.get("sht3", {}).get("h", ""),
                 int(data.get("heater",    False)),
-                int(data.get("solenoid2", False)),
                 int(data.get("solenoid",  False)),
+                int(data.get("solenoid2", False)),
                 data.get("setpoint", ""),
             ])
             self._file.flush()
