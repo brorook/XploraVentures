@@ -215,7 +215,7 @@
   <div class="card" style="margin-bottom:16px">
     <h3>Thermochemical Storage Cycle
       <span style="font-size:0.7rem;color:#4b5563;font-weight:400;margin-left:6px">
-        drag <span style="color:#ef4444">●</span> charge temp &nbsp;|&nbsp; drag <span style="color:#3b82f6">●</span> cool-to temp
+        drag <span style="color:#ef4444">●</span> to set charge temp
       </span>
     </h3>
 
@@ -233,40 +233,37 @@
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cool to (°C)</div>
-        <input type="number" id="cpCoolTo" value="30" step="1" min="15" max="60"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔT (°C)</div>
-        <input type="number" id="cpDeltaT" value="3" step="0.5" min="0.5" max="20"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
-      </div>
-      <div>
         <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cycles</div>
         <input type="number" id="cpCycles" value="3" step="1" min="1" max="999"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge ΔH (g/m³)</div>
+        <input type="number" id="cpDischargeDH" value="1.5" step="0.5" min="0.1"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cooldown ΔT (°C)</div>
+        <input type="number" id="cpCooldownDT" value="2" step="0.5" min="0.1"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
     </div>
 
     <!-- Action + live status row -->
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn success" onclick="cycleStart()">Start</button>
-      <select id="cpStartPhase" style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem">
-        <option value="charge">from Charge</option>
-        <option value="discharge">from Discharge</option>
-      </select>
+      <button class="btn" id="cpPauseBtn" onclick="cyclePause()" style="display:none">Pause</button>
       <button class="btn danger"  onclick="cycleStop()">Stop</button>
       <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
+        <div id="cpSoak" class="cp-box">DISCHARGE</div>
+        <span class="cp-arrow">→</span>
         <div id="cpHeat" class="cp-box">CHARGE</div>
         <span class="cp-arrow">→</span>
         <div id="cpCool" class="cp-box">COOLDOWN</div>
-        <span class="cp-arrow">→</span>
-        <div id="cpSoak" class="cp-box">DISCHARGE</div>
       </div>
       <div id="cpSoakBar" style="display:none;flex:1;min-width:140px">
         <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
-          <span>Charge</span><span id="cpSoakLabel">0m</span>
+          <span>At temp</span><span id="cpSoakLabel">0m</span>
         </div>
         <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:3px;height:6px;overflow:hidden">
           <div id="cpSoakFill" style="background:#ef4444;height:100%;width:0%;transition:width .9s linear"></div>
@@ -280,6 +277,9 @@
         <div id="cpDots" style="display:flex;gap:4px;flex-wrap:wrap"></div>
       </div>
       <div id="cpDoneLabel" style="display:none;font-size:0.9rem;font-weight:600;margin-left:auto"></div>
+    </div>
+    <div id="cpLogFile" style="display:none;font-size:0.75rem;color:#6b7280;margin-top:8px">
+      Logging → <span id="cpLogFileName" style="color:#9ba3af;font-family:monospace"></span>
     </div>
   </div>
 
@@ -319,7 +319,7 @@
         style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
         oninput="applyAxisRanges()">
       <span style="font-size:0.75rem;color:#6b7280;white-space:nowrap;margin-left:10px">Window (min):</span>
-      <input type="number" id="xWindow" placeholder="10" step="1" min="1" value="10"
+      <input type="number" id="xWindow" placeholder="60" step="1" min="60" value="60"
         style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:4px 8px;font-size:0.78rem;width:64px"
         oninput="applyAxisRanges()">
     </div>
@@ -344,7 +344,7 @@ socket.on("update_available", d => {
   document.getElementById("updateBanner").style.display = "flex";
 });
 
-let MAX_POINTS = 300;  // ~10 min at 2 s/sample
+let MAX_POINTS = 1800;  // ~60 min at 2 s/sample
 
 // ── Chart setup ──────────────────────────────────────────────────────────────
 const ctx = document.getElementById("liveChart").getContext("2d");
@@ -529,7 +529,7 @@ const CP_MAP    = { charging: "Heat", cooling: "Cool", discharging: "Soak" };
 
 const cp = {
   cvs: document.getElementById('cycleCanvas'),
-  p: { charge_sp: 120, charge_dur_h: 2, cool_to: 30, delta_t: 3 },
+  p: { charge_sp: 120, charge_dur_h: 2, discharge_dh: 1.5, cooldown_dt: 2.0 },
   drag: null, dragRange: null,
 };
 cp.ctx = cp.cvs.getContext('2d');
@@ -542,9 +542,9 @@ function cpLayout() {
   cp.W = r.width; cp.H = r.height;
   cp.iW = cp.W - CPL.l - CPL.r;
   cp.iH = cp.H - CPL.t - CPL.b;
-  cp.chargeX    = CPL.l;
-  cp.cooldownX  = CPL.l + cp.iW * 0.40;
-  cp.dischargeX = CPL.l + cp.iW * 0.62;
+  cp.chargeX    = CPL.l;                       // left edge (start of DISCHARGE)
+  cp.cooldownX  = CPL.l + cp.iW * 0.38;       // DISCHARGE → CHARGE boundary
+  cp.dischargeX = CPL.l + cp.iW * 0.65;       // CHARGE → COOLDOWN boundary
   cp.rightX     = cp.W - CPL.r;
   cp.tempH      = cp.iH * 0.60;
   cp.solY       = CPL.t + cp.tempH + 5;
@@ -555,75 +555,69 @@ function cpTY(t, lo, hi) { return CPL.t + cp.tempH * (1 - (t - lo) / (hi - lo));
 
 function cpDraw() {
   const { ctx: c, W, H, chargeX, cooldownX, dischargeX, rightX, tempH, solY, solH, p } = cp;
+  // chargeX=left (DISCHARGE start), cooldownX=DISCHARGE→CHARGE, dischargeX=CHARGE→COOLDOWN
   c.clearRect(0, 0, W, H);
-  const lo  = p.cool_to - 8;
-  const hi  = p.charge_sp + 15;
-  const spY = cpTY(p.charge_sp,        lo, hi);
-  const ctY = cpTY(p.cool_to,          lo, hi);
-  const rxY = cpTY(p.cool_to + 22,     lo, hi);
-  const dtY = cpTY(p.cool_to + p.delta_t, lo, hi);
+  const lo    = 15;
+  const hi    = p.charge_sp + 15;
+  const spY   = cpTY(p.charge_sp, lo, hi);
+  const ambY  = cpTY(25, lo, hi);    // approximate ambient for display
+  const endY  = cpTY(22, lo, hi);    // represents outlet ≤ inlet−2 at cooldown end
 
-  // Phase backgrounds (temperature area)
-  c.fillStyle='#2a1a1a'; c.fillRect(chargeX, CPL.t, cooldownX-chargeX, tempH);
-  c.fillStyle='#101622'; c.fillRect(cooldownX, CPL.t, dischargeX-cooldownX, tempH);
-  c.fillStyle='#0c1e1e'; c.fillRect(dischargeX, CPL.t, rightX-dischargeX, tempH);
+  // Phase backgrounds
+  c.fillStyle='#0c1e1e'; c.fillRect(chargeX,   CPL.t, cooldownX-chargeX,   tempH); // DISCHARGE
+  c.fillStyle='#2a1a1a'; c.fillRect(cooldownX,  CPL.t, dischargeX-cooldownX, tempH); // CHARGE
+  c.fillStyle='#101622'; c.fillRect(dischargeX, CPL.t, rightX-dischargeX,   tempH); // COOLDOWN
 
   // Phase labels
   c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
-  c.fillText(`CHARGE  ${p.charge_dur_h}h`,  (chargeX+cooldownX)/2,    CPL.t+5);
-  c.fillText('COOLDOWN',                     (cooldownX+dischargeX)/2, CPL.t+5);
-  c.fillText('DISCHARGE',                    (dischargeX+rightX)/2,    CPL.t+5);
+  c.fillText('DISCHARGE',                       (chargeX+cooldownX)/2,    CPL.t+5);
+  c.fillText(`CHARGE  ${p.charge_dur_h}h`,      (cooldownX+dischargeX)/2, CPL.t+5);
+  c.fillText('COOLDOWN',                        (dischargeX+rightX)/2,    CPL.t+5);
 
-  // Reference lines
+  // Charge setpoint reference line
   c.lineWidth=1; c.setLineDash([5,4]);
   c.strokeStyle='#ef444438'; c.beginPath(); c.moveTo(chargeX,spY); c.lineTo(rightX,spY); c.stroke();
-  c.strokeStyle='#3b82f638'; c.beginPath(); c.moveTo(chargeX,ctY); c.lineTo(rightX,ctY); c.stroke();
-  c.strokeStyle='#06b6d440'; c.beginPath(); c.moveTo(dischargeX,dtY); c.lineTo(rightX,dtY); c.stroke();
   c.setLineDash([]);
 
-  // Temperature curve
-  const rampEnd = chargeX + (cooldownX - chargeX) * 0.17;
-  const midDis  = (dischargeX + rightX) / 2;
+  // Temperature curve: discharge bell → charge ramp+plateau → cooldown fall
+  const discMid  = (chargeX + cooldownX) / 2;
+  const discPeakY = cpTY(32, lo, hi);  // small reaction-heat bump during discharge
+  const rampEnd  = cooldownX + (dischargeX - cooldownX) * 0.22;
   c.strokeStyle='#d1d5db'; c.lineWidth=2;
   c.beginPath();
-  c.moveTo(chargeX, ctY);
+  c.moveTo(chargeX, ambY);
+  c.bezierCurveTo(
+    chargeX + (discMid-chargeX)*0.45, ambY,
+    discMid - (discMid-chargeX)*0.25, discPeakY,
+    discMid, discPeakY
+  );
+  c.bezierCurveTo(
+    discMid + (cooldownX-discMid)*0.25, discPeakY,
+    cooldownX - (cooldownX-discMid)*0.45, ambY,
+    cooldownX, ambY
+  );
   c.lineTo(rampEnd, spY);
-  c.lineTo(cooldownX, spY);
-  c.lineTo(dischargeX, ctY);
-  c.bezierCurveTo(
-    dischargeX + (midDis-dischargeX)*0.35, ctY,
-    midDis - (midDis-dischargeX)*0.25, rxY,
-    midDis, rxY
-  );
-  c.bezierCurveTo(
-    midDis + (rightX-midDis)*0.25, rxY,
-    rightX - (rightX-midDis)*0.35, ctY,
-    rightX, ctY
-  );
+  c.lineTo(dischargeX, spY);
+  c.lineTo(rightX, endY);
   c.stroke();
 
-  // Y-axis labels
+  // Y-axis label
   c.fillStyle='#9ba3af'; c.textAlign='right'; c.textBaseline='middle'; c.font='10px Segoe UI';
   c.fillText(`${p.charge_sp}°C`, CPL.l-7, spY);
-  c.fillText(`${p.cool_to}°C`,   CPL.l-7, ctY);
 
-  // Delta-T end-of-discharge threshold label
-  c.fillStyle='#06b6d4'; c.textAlign='right'; c.font='9px Segoe UI';
-  c.fillText(`ΔT ${p.delta_t}°`, rightX, dtY-7);
-
-  // Drag handles
+  // Drag handle (charge setpoint)
   c.fillStyle='#ef4444'; c.beginPath(); c.arc(CPL.l-4, spY, 5.5, 0, Math.PI*2); c.fill();
-  c.fillStyle='#3b82f6'; c.beginPath(); c.arc(CPL.l-4, ctY, 5.5, 0, Math.PI*2); c.fill();
 
   // Solenoid row
   c.fillStyle='#131520'; c.fillRect(chargeX, solY, rightX-chargeX, solH);
-  c.fillStyle='#1b2030'; c.fillRect(chargeX+1, solY+2, dischargeX-chargeX-2, solH-4);
-  c.fillStyle='#4b5563'; c.textAlign='center'; c.textBaseline='middle'; c.font='9px Segoe UI';
-  c.fillText('DRY AIR  (drier on)', (chargeX+dischargeX)/2, solY+solH/2);
-  c.fillStyle='#0b3540'; c.fillRect(dischargeX+1, solY+2, rightX-dischargeX-2, solH-4);
-  c.fillStyle='#06b6d4'; c.font='9px Segoe UI';
-  c.fillText('WET AIR  (humidifier on)', (dischargeX+rightX)/2, solY+solH/2);
-  c.fillStyle='#4b5563'; c.textAlign='right';
+  c.fillStyle='#0b3540'; c.fillRect(chargeX+1,   solY+2, cooldownX-chargeX-2,   solH-4); // DISCHARGE
+  c.fillStyle='#06b6d4'; c.textAlign='center'; c.textBaseline='middle'; c.font='9px Segoe UI';
+  c.fillText('WET AIR  (humidifier)', (chargeX+cooldownX)/2, solY+solH/2);
+  c.fillStyle='#1b2030'; c.fillRect(cooldownX+1,  solY+2, dischargeX-cooldownX-2, solH-4); // CHARGE
+  c.fillStyle='#4b5563'; c.font='9px Segoe UI';
+  c.fillText('DRY  (drier on)', (cooldownX+dischargeX)/2, solY+solH/2);
+  c.fillText('— off —', (dischargeX+rightX)/2, solY+solH/2);              // COOLDOWN
+  c.textAlign='right';
   c.fillText('SOL', CPL.l-8, solY+solH/2);
 
   // Phase dividers
@@ -634,11 +628,9 @@ function cpDraw() {
 }
 
 function cpHit(mx, my) {
-  const lo = cp.p.cool_to-8, hi = cp.p.charge_sp+15;
+  const lo = 15, hi = cp.p.charge_sp + 15;
   const spY = cpTY(cp.p.charge_sp, lo, hi);
-  const ctY = cpTY(cp.p.cool_to,   lo, hi);
   if (Math.hypot(mx-(CPL.l-4), my-spY) < 11) return 'sp';
-  if (Math.hypot(mx-(CPL.l-4), my-ctY) < 11) return 'cool';
   return null;
 }
 
@@ -651,7 +643,7 @@ cp.cvs.addEventListener('mousedown', e => {
   const [mx, my] = cpXY(e);
   cp.drag = cpHit(mx, my);
   if (cp.drag) {
-    cp.dragRange = { lo: cp.p.cool_to-8, hi: cp.p.charge_sp+15 };
+    cp.dragRange = { lo: 15, hi: cp.p.charge_sp + 15 };
     cp.cvs.style.cursor = 'grabbing'; e.preventDefault();
   }
 });
@@ -665,8 +657,7 @@ window.addEventListener('mousemove', e => {
   const [mx, my] = cpXY(e);
   const { lo, hi } = cp.dragRange;
   const t = Math.round(lo + (hi - lo) * (1 - (my - CPL.t) / cp.tempH));
-  if (cp.drag === 'sp')   cp.p.charge_sp = Math.max(cp.p.cool_to + 10, Math.min(200, t));
-  if (cp.drag === 'cool') cp.p.cool_to   = Math.max(15, Math.min(cp.p.charge_sp - 10, t));
+  if (cp.drag === 'sp') cp.p.charge_sp = Math.max(50, Math.min(200, t));
   cpSyncToInputs(); cpDraw();
 });
 
@@ -675,15 +666,15 @@ window.addEventListener('mouseup', () => { cp.drag = null; });
 function cpSyncToInputs() {
   document.getElementById('cpChargeTemp').value  = cp.p.charge_sp;
   document.getElementById('cpChargeDurH').value  = cp.p.charge_dur_h;
-  document.getElementById('cpCoolTo').value      = cp.p.cool_to;
-  document.getElementById('cpDeltaT').value      = cp.p.delta_t;
+  document.getElementById('cpDischargeDH').value = cp.p.discharge_dh;
+  document.getElementById('cpCooldownDT').value  = cp.p.cooldown_dt;
 }
 
 function cpSyncFromInputs() {
   cp.p.charge_sp    = parseFloat(document.getElementById('cpChargeTemp').value) || 120;
   cp.p.charge_dur_h = parseFloat(document.getElementById('cpChargeDurH').value) || 2;
-  cp.p.cool_to      = parseFloat(document.getElementById('cpCoolTo').value)     || 30;
-  cp.p.delta_t      = parseFloat(document.getElementById('cpDeltaT').value)     || 3;
+  cp.p.discharge_dh = parseFloat(document.getElementById('cpDischargeDH').value) || 1.5;
+  cp.p.cooldown_dt  = parseFloat(document.getElementById('cpCooldownDT').value)  || 2.0;
   cpDraw();
 }
 
@@ -714,15 +705,24 @@ socket.on("cycle_status", d => {
   const dtEl = document.getElementById("cpDischargeDT");
   if (d.phase === "discharging") {
     dtEl.style.display = "";
-    dtEl.textContent   = `Ch3−Ch1 = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
+    dtEl.textContent   = `ΔRH = ${(d.delta_h_live ?? 0).toFixed(1)} %RH`;
+  } else if (d.phase === "cooling") {
+    dtEl.style.display = "";
+    dtEl.textContent   = `ΔT = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
   } else { dtEl.style.display = "none"; }
+
+  const pauseBtn  = document.getElementById("cpPauseBtn");
+  const paused    = d.phase === "paused";
+  const active    = d.total > 0 && !["idle","done","stopped"].includes(d.phase);
+  pauseBtn.style.display = active ? "" : "none";
+  pauseBtn.textContent   = paused ? "Resume" : "Pause";
 
   const cycleRow  = document.getElementById("cpCycleRow");
   const dotsEl    = document.getElementById("cpDots");
   const labelEl   = document.getElementById("cpCycleLabel");
   const doneLabel = document.getElementById("cpDoneLabel");
-  const running   = d.total > 0 && !["idle","done","stopped"].includes(d.phase);
-  if (running || d.phase === "done") {
+  const running   = active && !paused;
+  if (active || d.phase === "done") {
     cycleRow.style.display = "";
     labelEl.textContent = `${Math.max(0, d.cycle-(d.phase==="done"?0:1))} / ${d.total} done`;
     if (d.total <= 20) {
@@ -740,6 +740,7 @@ socket.on("cycle_status", d => {
 
   if      (d.phase === "done")    { doneLabel.style.display=""; doneLabel.style.color="#10b981"; doneLabel.textContent="✓ Complete"; }
   else if (d.phase === "stopped") { doneLabel.style.display=""; doneLabel.style.color="#6b7280"; doneLabel.textContent="⏹ Stopped"; }
+  else if (d.phase === "paused")  { doneLabel.style.display=""; doneLabel.style.color="#f59e0b"; doneLabel.textContent="⏸ Paused"; }
   else                            { doneLabel.style.display="none"; }
 });
 
@@ -747,18 +748,26 @@ async function cycleStart() {
   const body = {
     charge_sp:    cp.p.charge_sp,
     charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
-    cool_to:      cp.p.cool_to,
-    delta_t:      cp.p.delta_t,
     num_cycles:   parseInt(document.getElementById("cpCycles").value),
-    start_phase:  document.getElementById("cpStartPhase").value,
+    discharge_dh: cp.p.discharge_dh,
+    cooldown_dt:  cp.p.cooldown_dt,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
-  if (!d.ok) alert("Cycle error: " + d.error);
+  if (!d.ok) { alert("Cycle error: " + d.error); return; }
+  if (d.log_file) {
+    document.getElementById("cpLogFileName").textContent = d.log_file;
+    document.getElementById("cpLogFile").style.display = "";
+  }
 }
 
 async function cycleStop() {
   await fetch("/api/cycle/stop", { method:"POST" });
+}
+
+async function cyclePause() {
+  const paused = document.getElementById("cpPauseBtn").textContent === "Resume";
+  await fetch(paused ? "/api/cycle/resume" : "/api/cycle/pause", { method:"POST" });
 }
 
 async function logStart() {

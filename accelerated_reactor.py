@@ -123,8 +123,10 @@ def _on_telemetry(data: dict):
     csv_logger.log_row(data)
     if "sht1" in data:
         cycle_runner.last_t1 = data["sht1"].get("t")
+        cycle_runner.last_h1 = data["sht1"].get("h")
     if "sht3" in data:
         cycle_runner.last_t3 = data["sht3"].get("t")
+        cycle_runner.last_h3 = data["sht3"].get("h")
     if db:
         now = time.monotonic()
         if now - _last_db_telemetry >= 10.0:  # throttle to ~6/min to stay within Supabase free tier

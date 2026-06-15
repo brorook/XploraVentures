@@ -73,10 +73,9 @@ def create_blueprint(
         params = {
             "charge_sp":    float(body.get("charge_sp",    120)),
             "charge_dur_s": int(body.get("charge_dur_s",  7200)),
-            "cool_to":      float(body.get("cool_to",       30)),
-            "delta_t":      float(body.get("delta_t",        3)),
             "num_cycles":   int(body.get("num_cycles",        1)),
-            "start_phase":  body.get("start_phase", "charge"),
+            "discharge_dh": float(body.get("discharge_dh", 1.5)),
+            "cooldown_dt":  float(body.get("cooldown_dt",  2.0)),
         }
         if db:
             run_id_holder["id"] = db.start_cycle_run(params)
@@ -84,11 +83,23 @@ def create_blueprint(
         ok, err = cycle_runner.start(**params)
         if not ok:
             return jsonify({"ok": False, "error": err})
-        return jsonify({"ok": True})
+        log_ok, log_result = csv_logger.start()
+        log_file = log_result if log_ok else csv_logger.path
+        return jsonify({"ok": True, "log_file": log_file})
 
     @bp.route("/api/cycle/stop", methods=["POST"])
     def api_cycle_stop():
         cycle_runner.stop()
+        return jsonify({"ok": True})
+
+    @bp.route("/api/cycle/pause", methods=["POST"])
+    def api_cycle_pause():
+        cycle_runner.pause()
+        return jsonify({"ok": True})
+
+    @bp.route("/api/cycle/resume", methods=["POST"])
+    def api_cycle_resume():
+        cycle_runner.resume()
         return jsonify({"ok": True})
 
     # ── Misc ──────────────────────────────────────────────────────────────────
