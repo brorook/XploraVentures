@@ -731,7 +731,7 @@ socket.on("cycle_status", d => {
   const dtEl = document.getElementById("cpDischargeDT");
   if (d.phase === "discharging") {
     dtEl.style.display = "";
-    dtEl.textContent   = `ΔRH = ${(d.delta_h_live ?? 0).toFixed(1)} %RH`;
+    dtEl.textContent   = `ΔAH = ${(d.delta_h_live ?? 0).toFixed(2)} g/m³`;
   } else if (d.phase === "cooling") {
     dtEl.style.display = "";
     dtEl.textContent   = `ΔT = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
