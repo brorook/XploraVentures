@@ -19,9 +19,10 @@ class SupabaseDB:
 
     # ── Telemetry ─────────────────────────────────────────────────────────────
 
-    def insert_telemetry(self, data: dict):
+    def insert_telemetry(self, data: dict, run_id: int | None = None):
         row = {
             "ts":        datetime.datetime.utcnow().isoformat(),
+            "run_id":    run_id,
             "ch1_t":     data.get("sht1", {}).get("t"),
             "ch1_h":     data.get("sht1", {}).get("h"),
             "ch3_t":     data.get("sht3", {}).get("t"),
@@ -37,13 +38,15 @@ class SupabaseDB:
 
     def start_cycle_run(self, params: dict) -> int | None:
         row = {
-            "started_at":   datetime.datetime.utcnow().isoformat(),
-            "charge_sp":    params.get("charge_sp"),
-            "charge_dur_s": params.get("charge_dur_s"),
-            "cool_to":      params.get("cool_to"),
-            "delta_t":      params.get("delta_t"),
-            "num_cycles":   params.get("num_cycles"),
-            "start_phase":  params.get("start_phase"),
+            "started_at":     datetime.datetime.utcnow().isoformat(),
+            "charge_sp":      params.get("charge_sp"),
+            "charge_dur_s":   params.get("charge_dur_s"),
+            "num_cycles":     params.get("num_cycles"),
+            "discharge_dh":   params.get("discharge_dh"),
+            "cooldown_dt":    params.get("cooldown_dt"),
+            "dry_weight_g":   params.get("dry_weight"),
+            "flow_discharge": params.get("flow_discharge"),
+            "flow_charge":    params.get("flow_charge"),
         }
         try:
             with self._lock:

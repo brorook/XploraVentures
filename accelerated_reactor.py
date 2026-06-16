@@ -24,7 +24,7 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO
 
 from serial_manager import SerialManager
-from cycle_runner import CycleRunner
+from cycle_runner import CycleRunner, _abs_humidity
 from logger import CsvLogger
 from routes import create_blueprint
 
@@ -120,7 +120,19 @@ _last_db_telemetry = 0.0
 def _on_telemetry(data: dict):
     global _last_db_telemetry
     socketio.emit("telemetry", data)
-    csv_logger.log_row(data)
+    status = cycle_runner.get_status()
+    enriched = dict(data)
+    enriched["_phase"]            = status["phase"]
+    enriched["_mass_flux_g_min"]  = status.get("mass_flux_g_min", "")
+    enriched["_water_absorbed_g"] = status.get("water_absorbed_g", "")
+    enriched["_water_released_g"] = status.get("water_released_g", "")
+    t1 = data.get("sht1", {}).get("t"); h1 = data.get("sht1", {}).get("h")
+    t3 = data.get("sht3", {}).get("t"); h3 = data.get("sht3", {}).get("h")
+    if t1 is not None and h1 is not None:
+        enriched["_ah1"] = round(_abs_humidity(t1, h1), 3)
+    if t3 is not None and h3 is not None:
+        enriched["_ah3"] = round(_abs_humidity(t3, h3), 3)
+    csv_logger.log_row(enriched)
     if "sht1" in data:
         cycle_runner.last_t1 = data["sht1"].get("t")
         cycle_runner.last_h1 = data["sht1"].get("h")
@@ -131,7 +143,7 @@ def _on_telemetry(data: dict):
         now = time.monotonic()
         if now - _last_db_telemetry >= 10.0:  # throttle to ~6/min to stay within Supabase free tier
             _last_db_telemetry = now
-            threading.Thread(target=db.insert_telemetry, args=(data,), daemon=True).start()
+            threading.Thread(target=db.insert_telemetry, args=(data, run_id_holder["id"]), daemon=True).start()
 
 serial_mgr.add_listener(_on_telemetry)
 

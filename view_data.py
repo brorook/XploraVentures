@@ -32,7 +32,7 @@ COLOR_HUMID  = "#aaaaff"
 def load_csv(path):
     ts, ch1_t, ch1_h, ch3_t, ch3_h = [], [], [], [], []
     heater, drier, humidifier, setpoint = [], [], [], []
-    with open(path, newline="") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
@@ -75,10 +75,14 @@ def label_from_path(path):
     # accel_reactor_YYYYMMDD_HHMMSS.csv  →  Jun 10  10:51
     try:
         stem = name.replace("accel_reactor_", "").replace(".csv", "")
-        dt = datetime.datetime.strptime(stem, "%Y%m%d_%H%M%S")
-        return dt.strftime("%b %d  %H:%M")
-    except ValueError:
-        return name
+        for fmt, out in [("%Y%m%d_%H%M%S", "%b %d  %H:%M"), ("%Y%m%d", "%b %d")]:
+            try:
+                return datetime.datetime.strptime(stem, fmt).strftime(out)
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return name
 
 
 class Viewer:

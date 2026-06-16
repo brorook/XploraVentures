@@ -24,7 +24,10 @@ class CsvLogger:
             self._file = open(self._path, "w", newline="")
             self._writer = csv.writer(self._file)
             self._writer.writerow([
-                "timestamp", "ch1_t", "ch1_h", "ch3_t", "ch3_h",
+                "timestamp", "phase",
+                "ch1_t", "ch1_h", "ch1_ah",
+                "ch3_t", "ch3_h", "ch3_ah",
+                "mass_flux_g_min", "water_absorbed_g", "water_released_g",
                 "heater", "drier", "humidifier", "setpoint",
             ])
         return True, self._path
@@ -41,10 +44,10 @@ class CsvLogger:
                 return
             self._writer.writerow([
                 datetime.datetime.now().isoformat(),
-                data.get("sht1", {}).get("t", ""),
-                data.get("sht1", {}).get("h", ""),
-                data.get("sht3", {}).get("t", ""),
-                data.get("sht3", {}).get("h", ""),
+                data.get("_phase", ""),
+                data.get("sht1", {}).get("t", ""), data.get("sht1", {}).get("h", ""), data.get("_ah1", ""),
+                data.get("sht3", {}).get("t", ""), data.get("sht3", {}).get("h", ""), data.get("_ah3", ""),
+                data.get("_mass_flux_g_min", ""), data.get("_water_absorbed_g", ""), data.get("_water_released_g", ""),
                 int(data.get("heater",    False)),
                 int(data.get("solenoid",  False)),
                 int(data.get("solenoid2", False)),

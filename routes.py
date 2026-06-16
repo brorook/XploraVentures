@@ -71,11 +71,14 @@ def create_blueprint(
     def api_cycle_start():
         body = request.json or {}
         params = {
-            "charge_sp":    float(body.get("charge_sp",    120)),
-            "charge_dur_s": int(body.get("charge_dur_s",  7200)),
-            "num_cycles":   int(body.get("num_cycles",        1)),
-            "discharge_dh": float(body.get("discharge_dh", 1.5)),
-            "cooldown_dt":  float(body.get("cooldown_dt",  2.0)),
+            "charge_sp":      float(body.get("charge_sp",    120)),
+            "charge_dur_s":   int(body.get("charge_dur_s",  7200)),
+            "num_cycles":     int(body.get("num_cycles",        1)),
+            "discharge_dh":   float(body.get("discharge_dh", 1.5)),
+            "cooldown_dt":    float(body.get("cooldown_dt",  2.0)),
+            "dry_weight":     float(body["dry_weight"])     if body.get("dry_weight")     else None,
+            "flow_discharge": float(body["flow_discharge"]) if body.get("flow_discharge") else None,
+            "flow_charge":    float(body["flow_charge"])    if body.get("flow_charge")    else None,
         }
         if db:
             run_id_holder["id"] = db.start_cycle_run(params)

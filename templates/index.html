@@ -247,6 +247,21 @@
         <input type="number" id="cpCooldownDT" value="2" step="0.5" min="0.1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Dry weight (g)</div>
+        <input type="number" id="cpDryWeight" placeholder="e.g. 15.057" step="0.001" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Flow — discharge (L/min)</div>
+        <input type="number" id="cpFlowDis" placeholder="e.g. 2.5" step="0.1" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Flow — charge (L/min)</div>
+        <input type="number" id="cpFlowChg" placeholder="e.g. 2.5" step="0.1" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
     </div>
 
     <!-- Action + live status row -->
@@ -277,6 +292,12 @@
         <div id="cpDots" style="display:flex;gap:4px;flex-wrap:wrap"></div>
       </div>
       <div id="cpDoneLabel" style="display:none;font-size:0.9rem;font-weight:600;margin-left:auto"></div>
+    </div>
+    <div id="cpMassFlux" style="display:none;font-size:0.82rem;color:#a78bfa;margin-top:6px">
+      Flux: <span id="cpFluxVal">--</span> g/min &nbsp;|&nbsp;
+      <span id="cpWaterLabel">Absorbed</span>: <span id="cpWaterVal">--</span> g
+      <span id="cpWaterPct" style="color:#6b7280"></span>
+      <span id="cpRegenEff" style="color:#34d399"></span>
     </div>
     <div id="cpLogFile" style="display:none;font-size:0.75rem;color:#6b7280;margin-top:8px">
       Logging → <span id="cpLogFileName" style="color:#9ba3af;font-family:monospace"></span>
@@ -742,15 +763,39 @@ socket.on("cycle_status", d => {
   else if (d.phase === "stopped") { doneLabel.style.display=""; doneLabel.style.color="#6b7280"; doneLabel.textContent="⏹ Stopped"; }
   else if (d.phase === "paused")  { doneLabel.style.display=""; doneLabel.style.color="#f59e0b"; doneLabel.textContent="⏸ Paused"; }
   else                            { doneLabel.style.display="none"; }
+
+  const massFluxEl = document.getElementById("cpMassFlux");
+  if (d.phase === "discharging" || d.phase === "charging") {
+    massFluxEl.style.display = "";
+    document.getElementById("cpFluxVal").textContent = (d.mass_flux_g_min ?? 0).toFixed(4);
+    const dryW = parseFloat(document.getElementById("cpDryWeight").value);
+    if (d.phase === "discharging") {
+      document.getElementById("cpWaterLabel").textContent = "Absorbed";
+      document.getElementById("cpWaterVal").textContent   = (d.water_absorbed_g ?? 0).toFixed(3);
+      document.getElementById("cpWaterPct").textContent   = dryW > 0 ? ` (${((d.water_absorbed_g / dryW) * 100).toFixed(1)}% w/w)` : "";
+      document.getElementById("cpRegenEff").textContent   = "";
+    } else {
+      document.getElementById("cpWaterLabel").textContent = "Released";
+      document.getElementById("cpWaterVal").textContent   = (d.water_released_g ?? 0).toFixed(3);
+      document.getElementById("cpWaterPct").textContent   = dryW > 0 ? ` (${((d.water_released_g / dryW) * 100).toFixed(1)}% w/w)` : "";
+      const absorbed = d.water_absorbed_g ?? 0;
+      document.getElementById("cpRegenEff").textContent   = absorbed > 0 ? ` | Regen: ${((d.water_released_g / absorbed) * 100).toFixed(1)}%` : "";
+    }
+  } else {
+    massFluxEl.style.display = "none";
+  }
 });
 
 async function cycleStart() {
   const body = {
-    charge_sp:    cp.p.charge_sp,
-    charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
-    num_cycles:   parseInt(document.getElementById("cpCycles").value),
-    discharge_dh: cp.p.discharge_dh,
-    cooldown_dt:  cp.p.cooldown_dt,
+    charge_sp:      cp.p.charge_sp,
+    charge_dur_s:   Math.round(cp.p.charge_dur_h * 3600),
+    num_cycles:     parseInt(document.getElementById("cpCycles").value),
+    discharge_dh:   cp.p.discharge_dh,
+    cooldown_dt:    cp.p.cooldown_dt,
+    dry_weight:     parseFloat(document.getElementById("cpDryWeight").value)  || null,
+    flow_discharge: parseFloat(document.getElementById("cpFlowDis").value)    || null,
+    flow_charge:    parseFloat(document.getElementById("cpFlowChg").value)    || null,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
