@@ -238,7 +238,7 @@
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge ΔH (g/m³)</div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔH (g/m³)</div>
         <input type="number" id="cpDischargeDH" value="1.5" step="0.5" min="0.1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
@@ -246,6 +246,11 @@
         <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Cooldown ΔT (°C)</div>
         <input type="number" id="cpCooldownDT" value="2" step="0.5" min="0.1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Min discharge (min)</div>
+        <input type="number" id="cpMinDischarge" value="10" step="1" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
       </div>
       <div>
         <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Dry weight (g)</div>
@@ -795,7 +800,8 @@ async function cycleStart() {
     cooldown_dt:    cp.p.cooldown_dt,
     dry_weight:     parseFloat(document.getElementById("cpDryWeight").value)  || null,
     flow_discharge: parseFloat(document.getElementById("cpFlowDis").value)    || null,
-    flow_charge:    parseFloat(document.getElementById("cpFlowChg").value)    || null,
+    flow_charge:      parseFloat(document.getElementById("cpFlowChg").value)      || null,
+    min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();

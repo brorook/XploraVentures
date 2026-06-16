@@ -34,18 +34,21 @@ class CycleRunner:
 
     def start(self, charge_sp: float, charge_dur_s: int, num_cycles: int,
               discharge_dh: float = 1.5, cooldown_dt: float = 2.0,
+              min_discharge_s: int = 600,
               dry_weight: float = None, flow_discharge: float = None, flow_charge: float = None):
         if self._thread and self._thread.is_alive():
             return False, "already running"
-        self._dry_weight    = dry_weight
+        self._dry_weight     = dry_weight
         self._flow_discharge = flow_discharge
-        self._flow_charge   = flow_charge
+        self._flow_charge    = flow_charge
+        self._min_discharge_s = min_discharge_s
         self._stop_evt.clear()
         self._pause_evt.clear()
         self._thread = threading.Thread(
             target=self._run,
             kwargs=dict(charge_sp=charge_sp, charge_dur_s=charge_dur_s, num_cycles=num_cycles,
-                        discharge_dh=discharge_dh, cooldown_dt=cooldown_dt),
+                        discharge_dh=discharge_dh, cooldown_dt=cooldown_dt,
+                        min_discharge_s=min_discharge_s),
             daemon=True,
         )
         self._thread.start()
@@ -111,7 +114,7 @@ class CycleRunner:
             time.sleep(0.2)
         return time.monotonic() - t0
 
-    def _run(self, charge_sp, charge_dur_s, num_cycles, discharge_dh, cooldown_dt):
+    def _run(self, charge_sp, charge_dur_s, num_cycles, discharge_dh, cooldown_dt, min_discharge_s=600):
         self._current_charge_sp = charge_sp
         with self._lock:
             self._status.update({
@@ -126,7 +129,7 @@ class CycleRunner:
                 break
 
             # DISCHARGE ───────────────────────────────────────────────────────
-            # Ends when outlet humidity (H3) ≤ inlet humidity (H1) − discharge_dh g/m³
+            # Ends after min_discharge_s when inlet−outlet AH delta ≤ discharge_dh (bed saturated)
             self._set_phase("discharging", n)
             self._send({"cmd": "solenoid",  "on": True})
             self._send({"cmd": "solenoid2", "on": False})
@@ -157,7 +160,7 @@ class CycleRunner:
                     self._status["elapsed_s"]    = int(elapsed)
                     self._status["delta_h_live"] = delta_h
                 self._emit()
-                if have_all and ah3 <= ah1 - discharge_dh:
+                if have_all and elapsed >= min_discharge_s and ah1 - ah3 <= discharge_dh:
                     break
                 if elapsed > 21600:  # 6-hour safety timeout
                     break
@@ -172,6 +175,7 @@ class CycleRunner:
             self._set_phase("charging", n)
             with self._lock:
                 self._status["elapsed_s"]       = 0
+                self._status["delta_h_live"]    = 0.0
                 self._status["water_released_g"] = 0.0
                 self._status["mass_flux_g_min"]  = 0.0
             self._send({"cmd": "solenoid2", "on": True})
