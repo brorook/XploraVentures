@@ -213,21 +213,20 @@ class CycleRunner:
                 t1, h1 = self.last_t1, self.last_h1
                 t3, h3 = self.last_t3, self.last_h3
                 if t3 is not None:
-                    if t3 >= self._current_charge_sp:
-                        if at_temp_since is None:
-                            at_temp_since = time.monotonic()
+                    if at_temp_since is None and t3 >= self._current_charge_sp:
+                        at_temp_since = time.monotonic()
+                    elif at_temp_since is not None and t3 < self._current_charge_sp - 2:
+                        at_temp_since = None
+                        with self._lock:
+                            self._status["elapsed_s"] = 0
+                        self._emit()
+                    if at_temp_since is not None:
                         elapsed_at = int(time.monotonic() - at_temp_since)
                         with self._lock:
                             self._status["elapsed_s"] = elapsed_at
                         self._emit()
                         if elapsed_at >= self._charge_dur_s:
                             break
-                    else:
-                        if at_temp_since is not None and t3 < self._current_charge_sp - 2:
-                            at_temp_since = None
-                            with self._lock:
-                                self._status["elapsed_s"] = 0
-                            self._emit()
                 if self._flow_charge and all(v is not None for v in (t1, h1, t3, h3)):
                     ah1 = _abs_humidity(t1, h1)
                     ah3 = _abs_humidity(t3, h3)

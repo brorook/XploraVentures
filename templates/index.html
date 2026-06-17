@@ -228,8 +228,8 @@
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge duration (h)</div>
-        <input type="number" id="cpChargeDurH" value="2" step="0.5" min="0.1"
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge duration (min)</div>
+        <input type="number" id="cpChargeDurMin" value="120" step="5" min="1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
@@ -559,7 +559,7 @@ const CP_MAP    = { charging: "Heat", cooling: "Cool", discharging: "Soak" };
 
 const cp = {
   cvs: document.getElementById('cycleCanvas'),
-  p: { charge_sp: 120, charge_dur_h: 2, discharge_dh: 1.5, cooldown_dt: 2.0 },
+  p: { charge_sp: 120, charge_dur_min: 120, discharge_dh: 1.5, cooldown_dt: 2.0 },
   drag: null, dragRange: null,
 };
 cp.ctx = cp.cvs.getContext('2d');
@@ -601,7 +601,7 @@ function cpDraw() {
   // Phase labels
   c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
   c.fillText('DISCHARGE',                       (chargeX+cooldownX)/2,    CPL.t+5);
-  c.fillText(`CHARGE  ${p.charge_dur_h}h`,      (cooldownX+dischargeX)/2, CPL.t+5);
+  c.fillText(`CHARGE  ${p.charge_dur_min}m`,     (cooldownX+dischargeX)/2, CPL.t+5);
   c.fillText('COOLDOWN',                        (dischargeX+rightX)/2,    CPL.t+5);
 
   // Charge setpoint reference line
@@ -695,14 +695,14 @@ window.addEventListener('mouseup', () => { cp.drag = null; });
 
 function cpSyncToInputs() {
   document.getElementById('cpChargeTemp').value  = cp.p.charge_sp;
-  document.getElementById('cpChargeDurH').value  = cp.p.charge_dur_h;
+  document.getElementById('cpChargeDurMin').value  = cp.p.charge_dur_min;
   document.getElementById('cpDischargeDH').value = cp.p.discharge_dh;
   document.getElementById('cpCooldownDT').value  = cp.p.cooldown_dt;
 }
 
 function cpSyncFromInputs() {
   cp.p.charge_sp    = parseFloat(document.getElementById('cpChargeTemp').value) || 120;
-  cp.p.charge_dur_h = parseFloat(document.getElementById('cpChargeDurH').value) || 2;
+  cp.p.charge_dur_min = parseFloat(document.getElementById('cpChargeDurMin').value) || 120;
   cp.p.discharge_dh = parseFloat(document.getElementById('cpDischargeDH').value) || 1.5;
   cp.p.cooldown_dt  = parseFloat(document.getElementById('cpCooldownDT').value)  || 2.0;
   cpDraw();
@@ -799,7 +799,7 @@ socket.on("cycle_status", d => {
 async function cycleStart() {
   const body = {
     charge_sp:      cp.p.charge_sp,
-    charge_dur_s:   Math.round(cp.p.charge_dur_h * 3600),
+    charge_dur_s:   Math.round(cp.p.charge_dur_min * 60),
     num_cycles:     parseInt(document.getElementById("cpCycles").value),
     discharge_dh:   cp.p.discharge_dh,
     cooldown_dt:    cp.p.cooldown_dt,
@@ -825,7 +825,7 @@ async function cycleStop() {
 async function cycleUpdate() {
   const body = {
     charge_sp:    cp.p.charge_sp,
-    charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
+    charge_dur_s: Math.round(cp.p.charge_dur_min * 60),
     discharge_dh: cp.p.discharge_dh,
     cooldown_dt:  cp.p.cooldown_dt,
   };
