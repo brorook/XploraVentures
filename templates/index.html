@@ -255,7 +255,17 @@
       <div>
         <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Dry weight (g)</div>
         <input type="number" id="cpDryWeight" placeholder="e.g. 15.057" step="0.001" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Wet weight (g)</div>
+        <input type="number" id="cpWetWeight" placeholder="after discharge" step="0.001" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Post-dry weight (g)</div>
+        <input type="number" id="cpPostDryWeight" placeholder="after charge" step="0.001" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
       </div>
       <div>
         <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Flow — discharge (L/min)</div>
@@ -308,6 +318,7 @@
       <span id="cpWaterPct" style="color:#6b7280"></span>
       <span id="cpRegenEff" style="color:#34d399"></span>
     </div>
+    <div id="cpGravimetric" style="display:none;font-size:0.82rem;color:#fbbf24;margin-top:6px"></div>
     <div id="cpLogFile" style="display:none;font-size:0.75rem;color:#6b7280;margin-top:8px">
       Logging → <span id="cpLogFileName" style="color:#9ba3af;font-family:monospace"></span>
     </div>
@@ -829,7 +840,28 @@ async function cycleUpdate() {
     discharge_dh: cp.p.discharge_dh,
     cooldown_dt:  cp.p.cooldown_dt,
   };
+  const wetW    = parseFloat(document.getElementById("cpWetWeight").value);
+  const postDry = parseFloat(document.getElementById("cpPostDryWeight").value);
+  if (!isNaN(wetW))    body.wet_weight_g      = wetW;
+  if (!isNaN(postDry)) body.post_dry_weight_g = postDry;
   await fetch("/api/cycle/update", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+}
+
+function cpUpdateGravimetric() {
+  const dry     = parseFloat(document.getElementById("cpDryWeight").value);
+  const wet     = parseFloat(document.getElementById("cpWetWeight").value);
+  const postDry = parseFloat(document.getElementById("cpPostDryWeight").value);
+  const el      = document.getElementById("cpGravimetric");
+  if (isNaN(dry) || dry <= 0 || isNaN(wet) || wet <= dry) { el.style.display = "none"; return; }
+  const uptake = wet - dry;
+  const parts  = [`Uptake: ${uptake.toFixed(3)} g (${((uptake/dry)*100).toFixed(1)}% w/w)`];
+  if (!isNaN(postDry) && postDry > 0 && postDry < wet) {
+    const released = wet - postDry;
+    parts.push(`Released: ${released.toFixed(3)} g (${((released/dry)*100).toFixed(1)}% w/w)`);
+    parts.push(`Regen: ${((released/uptake)*100).toFixed(1)}%`);
+  }
+  el.style.display = "";
+  el.textContent   = parts.join("  |  ");
 }
 
 async function cyclePause() {

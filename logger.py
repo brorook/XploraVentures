@@ -29,6 +29,7 @@ class CsvLogger:
                 "ch3_t", "ch3_h", "ch3_ah",
                 "mass_flux_g_min", "water_absorbed_g", "water_released_g",
                 "heater", "drier", "humidifier", "setpoint",
+                "dry_weight_g", "wet_weight_g", "post_dry_weight_g",
             ])
         return True, self._path
 
@@ -52,5 +53,6 @@ class CsvLogger:
                 int(data.get("solenoid",  False)),
                 int(data.get("solenoid2", False)),
                 data.get("setpoint", ""),
+                data.get("_dry_weight_g", ""), data.get("_wet_weight_g", ""), data.get("_post_dry_weight_g", ""),
             ])
             self._file.flush()

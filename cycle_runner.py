@@ -32,6 +32,8 @@ class CycleRunner:
         self._discharge_dh = 0.0
         self._cooldown_dt = 0.0
         self._dry_weight = None
+        self._wet_weight_g = None
+        self._post_dry_weight_g = None
         self._flow_discharge = None
         self._flow_charge = None
 
@@ -96,7 +98,8 @@ class CycleRunner:
         self._pause_evt.clear()
         self._emit()
 
-    def update_params(self, charge_sp=None, charge_dur_s=None, discharge_dh=None, cooldown_dt=None):
+    def update_params(self, charge_sp=None, charge_dur_s=None, discharge_dh=None, cooldown_dt=None,
+                      wet_weight_g=None, post_dry_weight_g=None):
         if charge_sp is not None:
             self._current_charge_sp = float(charge_sp)
             if self._status["phase"] == "charging":
@@ -107,6 +110,10 @@ class CycleRunner:
             self._discharge_dh = float(discharge_dh)
         if cooldown_dt is not None:
             self._cooldown_dt = float(cooldown_dt)
+        if wet_weight_g is not None:
+            self._wet_weight_g = float(wet_weight_g)
+        if post_dry_weight_g is not None:
+            self._post_dry_weight_g = float(post_dry_weight_g)
         with self._lock:
             self._status["params"] = {
                 "charge_sp":    self._current_charge_sp,

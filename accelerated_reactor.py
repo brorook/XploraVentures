@@ -122,10 +122,13 @@ def _on_telemetry(data: dict):
     socketio.emit("telemetry", data)
     status = cycle_runner.get_status()
     enriched = dict(data)
-    enriched["_phase"]            = status["phase"]
+    enriched["_phase"]             = status["phase"]
     enriched["_mass_flux_g_min"]  = status.get("mass_flux_g_min", "")
     enriched["_water_absorbed_g"] = status.get("water_absorbed_g", "")
     enriched["_water_released_g"] = status.get("water_released_g", "")
+    enriched["_dry_weight_g"]      = cycle_runner._dry_weight      or ""
+    enriched["_wet_weight_g"]      = cycle_runner._wet_weight_g    or ""
+    enriched["_post_dry_weight_g"] = cycle_runner._post_dry_weight_g or ""
     t1 = data.get("sht1", {}).get("t"); h1 = data.get("sht1", {}).get("h")
     t3 = data.get("sht3", {}).get("t"); h3 = data.get("sht3", {}).get("h")
     if t1 is not None and h1 is not None:

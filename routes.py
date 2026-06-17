@@ -96,10 +96,12 @@ def create_blueprint(
     def api_cycle_update():
         body = request.json or {}
         params = {}
-        if "charge_sp"    in body: params["charge_sp"]    = float(body["charge_sp"])
-        if "charge_dur_s" in body: params["charge_dur_s"] = int(body["charge_dur_s"])
-        if "discharge_dh" in body: params["discharge_dh"] = float(body["discharge_dh"])
-        if "cooldown_dt"  in body: params["cooldown_dt"]  = float(body["cooldown_dt"])
+        if "charge_sp"         in body: params["charge_sp"]         = float(body["charge_sp"])
+        if "charge_dur_s"      in body: params["charge_dur_s"]      = int(body["charge_dur_s"])
+        if "discharge_dh"      in body: params["discharge_dh"]      = float(body["discharge_dh"])
+        if "cooldown_dt"       in body: params["cooldown_dt"]        = float(body["cooldown_dt"])
+        if "wet_weight_g"      in body: params["wet_weight_g"]      = float(body["wet_weight_g"])
+        if "post_dry_weight_g" in body: params["post_dry_weight_g"] = float(body["post_dry_weight_g"])
         cycle_runner.update_params(**params)
         return jsonify({"ok": True})
 
