@@ -272,6 +272,10 @@
     <!-- Action + live status row -->
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn success" onclick="cycleStart()">Start</button>
+      <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#9ba3af;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" id="cpSkipDischarge"> Skip to charge
+      </label>
+      <button class="btn ghost" id="cpUpdateBtn" onclick="cycleUpdate()" style="display:none">Update params</button>
       <button class="btn" id="cpPauseBtn" onclick="cyclePause()" style="display:none">Pause</button>
       <button class="btn danger"  onclick="cycleStop()">Stop</button>
       <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
@@ -742,6 +746,7 @@ socket.on("cycle_status", d => {
   const active    = d.total > 0 && !["idle","done","stopped"].includes(d.phase);
   pauseBtn.style.display = active ? "" : "none";
   pauseBtn.textContent   = paused ? "Resume" : "Pause";
+  document.getElementById("cpUpdateBtn").style.display = active ? "" : "none";
 
   const cycleRow  = document.getElementById("cpCycleRow");
   const dotsEl    = document.getElementById("cpDots");
@@ -802,6 +807,7 @@ async function cycleStart() {
     flow_discharge: parseFloat(document.getElementById("cpFlowDis").value)    || null,
     flow_charge:      parseFloat(document.getElementById("cpFlowChg").value)      || null,
     min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
+    start_phase:      document.getElementById("cpSkipDischarge").checked ? "charging" : "discharging",
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
@@ -814,6 +820,16 @@ async function cycleStart() {
 
 async function cycleStop() {
   await fetch("/api/cycle/stop", { method:"POST" });
+}
+
+async function cycleUpdate() {
+  const body = {
+    charge_sp:    cp.p.charge_sp,
+    charge_dur_s: Math.round(cp.p.charge_dur_h * 3600),
+    discharge_dh: cp.p.discharge_dh,
+    cooldown_dt:  cp.p.cooldown_dt,
+  };
+  await fetch("/api/cycle/update", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
 }
 
 async function cyclePause() {

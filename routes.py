@@ -77,6 +77,7 @@ def create_blueprint(
             "discharge_dh":   float(body.get("discharge_dh",    1.5)),
             "cooldown_dt":    float(body.get("cooldown_dt",    2.0)),
             "min_discharge_s": int(body.get("min_discharge_s", 600)),
+            "start_phase":    body.get("start_phase", "discharging"),
             "dry_weight":     float(body["dry_weight"])     if body.get("dry_weight")     else None,
             "flow_discharge": float(body["flow_discharge"]) if body.get("flow_discharge") else None,
             "flow_charge":    float(body["flow_charge"])    if body.get("flow_charge")    else None,
@@ -90,6 +91,17 @@ def create_blueprint(
         log_ok, log_result = csv_logger.start()
         log_file = log_result if log_ok else csv_logger.path
         return jsonify({"ok": True, "log_file": log_file})
+
+    @bp.route("/api/cycle/update", methods=["POST"])
+    def api_cycle_update():
+        body = request.json or {}
+        params = {}
+        if "charge_sp"    in body: params["charge_sp"]    = float(body["charge_sp"])
+        if "charge_dur_s" in body: params["charge_dur_s"] = int(body["charge_dur_s"])
+        if "discharge_dh" in body: params["discharge_dh"] = float(body["discharge_dh"])
+        if "cooldown_dt"  in body: params["cooldown_dt"]  = float(body["cooldown_dt"])
+        cycle_runner.update_params(**params)
+        return jsonify({"ok": True})
 
     @bp.route("/api/cycle/stop", methods=["POST"])
     def api_cycle_stop():
