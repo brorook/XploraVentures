@@ -176,7 +176,7 @@ class Viewer:
         plt.setp(self.ax_t.get_xticklabels(), visible=False)
 
         # water uptake axes  (shares x with ax_t, sits below)
-        self.ax_w = self.fig.add_axes([0.07, 0.09, 0.60, 0.14],
+        self.ax_w = self.fig.add_axes([0.07, 0.11, 0.60, 0.13],
                                       sharex=self.ax_t)
         self.ax_w.set_facecolor("#12121e")
         for spine in self.ax_w.spines.values():
@@ -264,7 +264,7 @@ class Viewer:
         self.tb_m_post_dry = TextBox(ax_tb5, "Post-dry wt (g) ", initial="0.0", **tb_style)
         self.tb_m_post_dry.on_submit(self._on_m_post_dry)
 
-        self._stats_text = self.fig.text(0.51, 0.077, "", color="#fbbf24", fontsize=8, va="center")
+        self._stats_text = self.fig.text(0.705, 0.515, "", color="#fbbf24", fontsize=8, va="center")
 
         # ── hover cursor ──────────────────────────────────────────────────────
         # Use raw Line2D so xdata starts at nan and never registers x=0 (epoch)
@@ -409,12 +409,12 @@ class Viewer:
             self.fig.canvas.draw_idle()
             return
         uptake = wet - dry
-        parts  = [f"Uptake {uptake:.3f} g  ({uptake/dry*100:.1f}% w/w)"]
+        lines  = [f"Uptake   {uptake:.3f} g  ({uptake/dry*100:.1f}% w/w)"]
         if 0 < post < wet:
             released = wet - post
-            parts.append(f"Released {released:.3f} g  ({released/dry*100:.1f}% w/w)")
-            parts.append(f"Regen {released/uptake*100:.1f}%")
-        self._stats_text.set_text("  |  ".join(parts))
+            lines.append(f"Released {released:.3f} g  ({released/dry*100:.1f}% w/w)")
+            lines.append(f"Regen    {released/uptake*100:.1f}%")
+        self._stats_text.set_text("\n".join(lines))
         self.fig.canvas.draw_idle()
 
     def _on_hover(self, event):
