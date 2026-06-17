@@ -151,8 +151,9 @@ class Viewer:
         self.q_dis     = 10.0  # L/min  (discharge / humidification phase)
         self.q_chg     = 10.0  # L/min  (charge / drying phase)
         self.m_dry     = 1.0   # g      (dry sorbent mass)
-        self.m_wet     = 0.0   # g      (mass after humidification)
-        self.m_post_dry = 0.0  # g      (mass after drying)
+        self.m_wet      = 0.0   # g      (mass after humidification)
+        self.m_post_dry = 0.0   # g      (mass after drying)
+        self._session_weights = {}  # {idx: (m_dry, m_wet, m_post_dry)}
 
         # ── figure ────────────────────────────────────────────────────────────
         self.fig = plt.figure(figsize=(14, 7))
@@ -355,8 +356,13 @@ class Viewer:
     # ── callbacks ─────────────────────────────────────────────────────────────
 
     def _on_radio(self, label):
+        self._session_weights[self.current] = (self.m_dry, self.m_wet, self.m_post_dry)
         idx = self.labels.index(label)
         self.current = idx
+        self.m_dry, self.m_wet, self.m_post_dry = self._session_weights.get(idx, (1.0, 0.0, 0.0))
+        self.tb_m_dry.set_val(str(self.m_dry))
+        self.tb_m_wet.set_val(str(self.m_wet))
+        self.tb_m_post_dry.set_val(str(self.m_post_dry))
         self._load(idx)
 
     def _on_check(self, label):
@@ -382,6 +388,7 @@ class Viewer:
     def _on_m_dry(self, val):
         try:
             self.m_dry = float(val)
+            self._session_weights[self.current] = (self.m_dry, self.m_wet, self.m_post_dry)
             self._update_water(self._get_data(self.current))
             self._update_gravimetric_stats()
             self.fig.canvas.draw_idle()
@@ -391,6 +398,7 @@ class Viewer:
     def _on_m_wet(self, val):
         try:
             self.m_wet = float(val)
+            self._session_weights[self.current] = (self.m_dry, self.m_wet, self.m_post_dry)
             self._update_gravimetric_stats()
         except ValueError:
             pass
@@ -398,6 +406,7 @@ class Viewer:
     def _on_m_post_dry(self, val):
         try:
             self.m_post_dry = float(val)
+            self._session_weights[self.current] = (self.m_dry, self.m_wet, self.m_post_dry)
             self._update_gravimetric_stats()
         except ValueError:
             pass
