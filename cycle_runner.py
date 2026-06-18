@@ -93,7 +93,8 @@ class CycleRunner:
             self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
         elif phase == "cooling":
-            self._send({"cmd": "solenoid",  "on": True})
+            self._send({"cmd": "solenoid",  "on": False})
+            self._send({"cmd": "solenoid2", "on": True})
         with self._lock:
             self._status["phase"] = phase
         self._pause_evt.clear()
@@ -259,8 +260,8 @@ class CycleRunner:
             self._set_phase("cooling", n)
             with self._lock:
                 self._status["mass_flux_g_min"] = 0.0
-            self._send({"cmd": "solenoid",  "on": True})
-            self._send({"cmd": "solenoid2", "on": False})
+            self._send({"cmd": "solenoid",  "on": False})
+            self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": 0})
             while not self._stop_evt.is_set():
                 t1 = self.last_t1
