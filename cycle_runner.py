@@ -270,7 +270,7 @@ class CycleRunner:
                 with self._lock:
                     self._status["delta_t_live"] = diff
                 self._emit()
-                if t1 is not None and t3 is not None and t3 <= t1 - self._cooldown_dt:
+                if t1 is not None and t3 is not None and t3 <= t1 + self._cooldown_dt:
                     break
                 self._tick()
 
