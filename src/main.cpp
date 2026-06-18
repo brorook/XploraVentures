@@ -9,7 +9,7 @@
 #define FW_VERSION      "1.3.0-ar"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
-#define TELEMETRY_MS    2000
+#define TELEMETRY_MS    10000
 
 // ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
 static float g_setpoint   = 0.0f;

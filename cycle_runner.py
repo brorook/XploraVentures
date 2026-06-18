@@ -92,7 +92,8 @@ class CycleRunner:
         elif phase == "charging":
             self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
-        # cooling: actuators are already off — nothing to re-activate
+        elif phase == "cooling":
+            self._send({"cmd": "solenoid",  "on": True})
         with self._lock:
             self._status["phase"] = phase
         self._pause_evt.clear()
@@ -163,8 +164,8 @@ class CycleRunner:
                 break
 
             # DISCHARGE ───────────────────────────────────────────────────────
-            if not (n == 1 and start_phase == "charging"):
-                # Ends after min_discharge_s when inlet−outlet AH delta ≤ discharge_dh (bed saturated)
+            if not (n == 1 and start_phase in ("charging", "cooling")):
+                # Ends after min_discharge_s when inlet-outlet AH delta <= discharge_dh (bed saturated)
                 self._set_phase("discharging", n)
                 self._send({"cmd": "solenoid",  "on": True})
                 self._send({"cmd": "solenoid2", "on": False})
@@ -206,53 +207,59 @@ class CycleRunner:
                     break
 
             # CHARGE ──────────────────────────────────────────────────────────
-            # Ends when T3 ≥ charge_sp AND sustained continuously for charge_dur_s
-            self._set_phase("charging", n)
-            with self._lock:
-                self._status["elapsed_s"]       = 0
-                self._status["delta_h_live"]    = 0.0
-                self._status["water_released_g"] = 0.0
-                self._status["mass_flux_g_min"]  = 0.0
-            self._send({"cmd": "solenoid2", "on": True})
-            self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
-            at_temp_since = None
-            while not self._stop_evt.is_set():
-                t1, h1 = self.last_t1, self.last_h1
-                t3, h3 = self.last_t3, self.last_h3
-                if t3 is not None:
-                    if at_temp_since is None and t3 >= self._current_charge_sp:
-                        at_temp_since = time.monotonic()
-                    elif at_temp_since is not None and t3 < self._current_charge_sp - 2:
-                        at_temp_since = None
+            # Ends when T3 >= charge_sp AND sustained continuously for charge_dur_s
+            if not (n == 1 and start_phase == "cooling"):
+                self._set_phase("charging", n)
+                with self._lock:
+                    self._status["elapsed_s"]        = 0
+                    self._status["delta_h_live"]     = 0.0
+                    self._status["water_released_g"] = 0.0
+                    self._status["mass_flux_g_min"]  = 0.0
+                self._send({"cmd": "solenoid2", "on": True})
+                self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
+                at_temp_since = None
+                while not self._stop_evt.is_set():
+                    t1, h1 = self.last_t1, self.last_h1
+                    t3, h3 = self.last_t3, self.last_h3
+                    if t3 is not None:
+                        if at_temp_since is None and t3 >= self._current_charge_sp:
+                            at_temp_since = time.monotonic()
+                        elif at_temp_since is not None and t3 < self._current_charge_sp - 2:
+                            # Check duration BEFORE resetting — a dip right at the end
+                            # must not cancel a completed soak.
+                            if int(time.monotonic() - at_temp_since) >= self._charge_dur_s:
+                                break
+                            at_temp_since = None
+                            with self._lock:
+                                self._status["elapsed_s"] = 0
+                            self._emit()
+                        if at_temp_since is not None:
+                            elapsed_at = int(time.monotonic() - at_temp_since)
+                            with self._lock:
+                                self._status["elapsed_s"] = elapsed_at
+                            self._emit()
+                            if elapsed_at >= self._charge_dur_s:
+                                break
+                    if self._flow_charge and all(v is not None for v in (t1, h1, t3, h3)):
+                        ah1 = _abs_humidity(t1, h1)
+                        ah3 = _abs_humidity(t3, h3)
+                        flux = self._flow_charge * max(0.0, ah3 - ah1) / 1000.0
                         with self._lock:
-                            self._status["elapsed_s"] = 0
-                        self._emit()
+                            self._status["water_released_g"] += flux * (2.0 / 60.0)
+                            self._status["mass_flux_g_min"]   = round(flux, 4)
+                    paused_s = self._tick()
                     if at_temp_since is not None:
-                        elapsed_at = int(time.monotonic() - at_temp_since)
-                        with self._lock:
-                            self._status["elapsed_s"] = elapsed_at
-                        self._emit()
-                        if elapsed_at >= self._charge_dur_s:
-                            break
-                if self._flow_charge and all(v is not None for v in (t1, h1, t3, h3)):
-                    ah1 = _abs_humidity(t1, h1)
-                    ah3 = _abs_humidity(t3, h3)
-                    flux = self._flow_charge * max(0.0, ah3 - ah1) / 1000.0
-                    with self._lock:
-                        self._status["water_released_g"] += flux * (2.0 / 60.0)
-                        self._status["mass_flux_g_min"]   = round(flux, 4)
-                paused_s = self._tick()
-                if at_temp_since is not None:
-                    at_temp_since += paused_s  # freeze the soak timer while paused
+                        at_temp_since += paused_s  # freeze the soak timer while paused
 
-            if self._stop_evt.is_set():
-                break
+                if self._stop_evt.is_set():
+                    break
 
             # COOLDOWN ────────────────────────────────────────────────────────
-            # Ends when outlet temp (T3) ≤ inlet temp (T1) − 2 °C
+            # Ends when outlet temp (T3) <= inlet temp (T1) - cooldown_dt
             self._set_phase("cooling", n)
             with self._lock:
                 self._status["mass_flux_g_min"] = 0.0
+            self._send({"cmd": "solenoid",  "on": True})
             self._send({"cmd": "solenoid2", "on": False})
             self._send({"cmd": "set_sp",    "val": 0})
             while not self._stop_evt.is_set():

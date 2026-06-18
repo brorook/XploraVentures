@@ -282,9 +282,11 @@
     <!-- Action + live status row -->
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn success" onclick="cycleStart()">Start</button>
-      <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#9ba3af;cursor:pointer;white-space:nowrap">
-        <input type="checkbox" id="cpSkipDischarge"> Skip to charge
-      </label>
+      <select id="cpStartPhase" style="font-size:0.8rem;background:#1e2130;color:#9ba3af;border:1px solid #3a3d4a;border-radius:4px;padding:3px 8px;cursor:pointer">
+        <option value="discharging">Start: Discharge</option>
+        <option value="charging">Start: Charge</option>
+        <option value="cooling">Start: Cooldown</option>
+      </select>
       <button class="btn ghost" id="cpUpdateBtn" onclick="cycleUpdate()" style="display:none">Update params</button>
       <button class="btn" id="cpPauseBtn" onclick="cyclePause()" style="display:none">Pause</button>
       <button class="btn danger"  onclick="cycleStop()">Stop</button>
@@ -818,7 +820,7 @@ async function cycleStart() {
     flow_discharge: parseFloat(document.getElementById("cpFlowDis").value)    || null,
     flow_charge:      parseFloat(document.getElementById("cpFlowChg").value)      || null,
     min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
-    start_phase:      document.getElementById("cpSkipDischarge").checked ? "charging" : "discharging",
+    start_phase:      document.getElementById("cpStartPhase").value,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
