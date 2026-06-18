@@ -839,6 +839,7 @@ async function cycleUpdate() {
   const body = {
     charge_sp:    cp.p.charge_sp,
     charge_dur_s: Math.round(cp.p.charge_dur_min * 60),
+    num_cycles:   parseInt(document.getElementById("cpCycles").value),
     discharge_dh: cp.p.discharge_dh,
     cooldown_dt:  cp.p.cooldown_dt,
   };

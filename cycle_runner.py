@@ -29,6 +29,7 @@ class CycleRunner:
         self._paused_phase = None
         self._current_charge_sp = 0.0
         self._charge_dur_s = 0
+        self._num_cycles = 0
         self._discharge_dh = 0.0
         self._cooldown_dt = 0.0
         self._dry_weight = None
@@ -46,6 +47,7 @@ class CycleRunner:
             return False, "already running"
         self._current_charge_sp = charge_sp
         self._charge_dur_s      = charge_dur_s
+        self._num_cycles        = num_cycles
         self._discharge_dh      = discharge_dh
         self._cooldown_dt       = cooldown_dt
         self._dry_weight        = dry_weight
@@ -100,7 +102,8 @@ class CycleRunner:
         self._pause_evt.clear()
         self._emit()
 
-    def update_params(self, charge_sp=None, charge_dur_s=None, discharge_dh=None, cooldown_dt=None,
+    def update_params(self, charge_sp=None, charge_dur_s=None, num_cycles=None,
+                      discharge_dh=None, cooldown_dt=None,
                       wet_weight_g=None, post_dry_weight_g=None):
         if charge_sp is not None:
             self._current_charge_sp = float(charge_sp)
@@ -108,6 +111,10 @@ class CycleRunner:
                 self._send({"cmd": "set_sp", "val": self._current_charge_sp})
         if charge_dur_s is not None:
             self._charge_dur_s = int(charge_dur_s)
+        if num_cycles is not None:
+            self._num_cycles = max(1, int(num_cycles))
+            with self._lock:
+                self._status["total"] = self._num_cycles
         if discharge_dh is not None:
             self._discharge_dh = float(discharge_dh)
         if cooldown_dt is not None:
@@ -160,8 +167,10 @@ class CycleRunner:
                            "discharge_dh": self._discharge_dh, "cooldown_dt": self._cooldown_dt},
             })
 
-        for n in range(1, num_cycles + 1):
-            if self._stop_evt.is_set():
+        n = 0
+        while not self._stop_evt.is_set():
+            n += 1
+            if n > self._num_cycles:
                 break
 
             # DISCHARGE ───────────────────────────────────────────────────────
