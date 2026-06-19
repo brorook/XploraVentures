@@ -162,6 +162,7 @@
       <h3>Chamber Temp (PT1000)</h3>
       <div class="sensor-val" id="rtdT">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="rtdStatus" style="margin-top:6px;color:#9ba3af">—</div>
+      <div class="sensor-sub" id="rtdRH" style="margin-top:3px;color:#a78bfa">RH (inferred): -- %</div>
     </div>
   </div>
 
@@ -410,6 +411,7 @@ const chart = new Chart(ctx, {
       { label: "Ch1 Abs. Humidity (g/m³)", yAxisID: "yAH", data: [], borderColor: "#818cf8", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
       { label: "Ch3 Abs. Humidity (g/m³)", yAxisID: "yAH", data: [], borderColor: "#fb923c", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
       { label: "RTD Temp (°C)",  yAxisID: "yT", data: [], borderColor: "#a78bfa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
+      { label: "Chamber RH inferred (%)", yAxisID: "yH", data: [], borderColor: "#c084fc", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
     ]
   },
   options: {
@@ -453,6 +455,8 @@ function pushChart(t1, h1, t3, h3, sp, rtd) {
   ds[5].data.push(absHumidity(t1, h1));
   ds[6].data.push(absHumidity(t3, h3));
   ds[7].data.push(rtd ?? null);
+  const rhChamber = (rtd != null) ? Math.min(100, absHumidity(t3, h3) / absHumidity(rtd, 100) * 100) : null;
+  ds[8].data.push(rhChamber);
   if (labels.length > MAX_POINTS) {
     labels.shift();
     ds.forEach(d => d.data.shift());
@@ -516,6 +520,11 @@ socket.on("telemetry", d => {
       document.getElementById("rtdStatus").textContent = "OK";
       document.getElementById("rtdStatus").style.color = "#10b981";
     }
+  }
+  // Chamber RH inferred from outlet AH at PT1000 temperature
+  if (d.sht3 !== undefined && d.rtd != null) {
+    const rhChamber = Math.min(100, absHumidity(d.sht3.t, d.sht3.h) / absHumidity(d.rtd, 100) * 100);
+    document.getElementById("rtdRH").textContent = "RH (inferred): " + rhChamber.toFixed(1) + " %";
   }
   // FW
   if (d.fw) {

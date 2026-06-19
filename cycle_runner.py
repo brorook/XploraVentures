@@ -218,7 +218,7 @@ class CycleRunner:
                     break
 
             # CHARGE ──────────────────────────────────────────────────────────
-            # Ends when T3 >= charge_sp AND sustained continuously for charge_dur_s
+            # Ends when RTD >= charge_sp AND sustained continuously for charge_dur_s
             if not (n == 1 and start_phase == "cooling"):
                 self._set_phase("charging", n)
                 with self._lock:
@@ -232,10 +232,11 @@ class CycleRunner:
                 while not self._stop_evt.is_set():
                     t1, h1 = self.last_t1, self.last_h1
                     t3, h3 = self.last_t3, self.last_h3
-                    if t3 is not None:
-                        if at_temp_since is None and t3 >= self._current_charge_sp:
+                    rtd = self.last_rtd
+                    if rtd is not None:
+                        if at_temp_since is None and rtd >= self._current_charge_sp:
                             at_temp_since = time.monotonic()
-                        elif at_temp_since is not None and t3 < self._current_charge_sp - 2:
+                        elif at_temp_since is not None and rtd < self._current_charge_sp - 2:
                             # Check duration BEFORE resetting — a dip right at the end
                             # must not cancel a completed soak.
                             if int(time.monotonic() - at_temp_since) >= self._charge_dur_s:
