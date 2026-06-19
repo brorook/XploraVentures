@@ -142,7 +142,7 @@
   </div>
 
   <!-- Sensors -->
-  <div class="grid grid-2" style="margin-bottom:16px">
+  <div class="grid grid-3" style="margin-bottom:16px">
     <!-- Channel 1 -->
     <div class="card">
       <h3>Channel 1 — Temp / Humidity</h3>
@@ -156,6 +156,12 @@
       <div class="sensor-val" id="ch3T">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="ch3H">Humidity: -- %</div>
       <div class="sensor-sub" id="ch3AH" style="margin-top:3px;color:#fbbf24">Abs. humidity: -- g/m³</div>
+    </div>
+    <!-- PT1000 RTD -->
+    <div class="card">
+      <h3>PT1000 RTD</h3>
+      <div class="sensor-val" id="rtdT">--<span class="sensor-unit"> °C</span></div>
+      <div class="sensor-sub" id="rtdStatus" style="margin-top:6px;color:#9ba3af">—</div>
     </div>
   </div>
 
@@ -354,6 +360,7 @@ const chart = new Chart(ctx, {
       { label: "Setpoint (°C)",  yAxisID: "yT", data: [], borderColor: "#ef4444", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, borderDash: [6,3], tension: 0 },
       { label: "Ch1 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#60a5fa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
       { label: "Ch3 Humidity (%)", yAxisID: "yH", data: [], borderColor: "#fbbf24", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
+      { label: "RTD Temp (°C)",  yAxisID: "yT", data: [], borderColor: "#a78bfa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
     ]
   },
   options: {
@@ -380,7 +387,7 @@ const chart = new Chart(ctx, {
   }
 });
 
-function pushChart(t1, h1, t3, h3, sp) {
+function pushChart(t1, h1, t3, h3, sp, rtd) {
   const ts = new Date().toLocaleTimeString();
   const ds = chart.data.datasets;
   const labels = chart.data.labels;
@@ -390,6 +397,7 @@ function pushChart(t1, h1, t3, h3, sp) {
   ds[2].data.push(sp);
   ds[3].data.push(h1);
   ds[4].data.push(h3);
+  ds[5].data.push(rtd ?? null);
   if (labels.length > MAX_POINTS) {
     labels.shift();
     ds.forEach(d => d.data.shift());
@@ -442,6 +450,18 @@ socket.on("telemetry", d => {
   // Hysteresis
   if (d.hysteresis !== undefined && document.getElementById("hystInput") !== document.activeElement)
     document.getElementById("hystInput").value = d.hysteresis;
+  // PT1000 RTD
+  if (d.rtd !== undefined) {
+    if (d.rtd === null) {
+      document.getElementById("rtdT").innerHTML = '--<span class="sensor-unit"> °C</span>';
+      document.getElementById("rtdStatus").textContent = "Fault / open-circuit";
+      document.getElementById("rtdStatus").style.color = "#ef4444";
+    } else {
+      document.getElementById("rtdT").innerHTML = d.rtd.toFixed(1) + '<span class="sensor-unit"> °C</span>';
+      document.getElementById("rtdStatus").textContent = "OK";
+      document.getElementById("rtdStatus").style.color = "#10b981";
+    }
+  }
   // FW
   if (d.fw) {
     const b = document.getElementById("fwBadge");
@@ -449,7 +469,7 @@ socket.on("telemetry", d => {
   }
   // Push to chart whenever we have both sensors
   if (d.sht1 !== undefined && d.sht3 !== undefined)
-    pushChart(d.sht1.t, d.sht1.h, d.sht3.t, d.sht3.h, sp);
+    pushChart(d.sht1.t, d.sht1.h, d.sht3.t, d.sht3.h, sp, d.rtd);
 });
 
 async function refreshPorts() {

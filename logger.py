@@ -25,7 +25,7 @@ class CsvLogger:
             self._writer = csv.writer(self._file)
             self._writer.writerow([
                 "timestamp", "ch1_t", "ch1_h", "ch3_t", "ch3_h",
-                "heater", "drier", "humidifier", "setpoint",
+                "rtd_t", "heater", "drier", "humidifier", "setpoint",
             ])
         return True, self._path
 
@@ -45,6 +45,7 @@ class CsvLogger:
                 data.get("sht1", {}).get("h", ""),
                 data.get("sht3", {}).get("t", ""),
                 data.get("sht3", {}).get("h", ""),
+                data.get("rtd", ""),
                 int(data.get("heater",    False)),
                 int(data.get("solenoid2", False)),
                 int(data.get("solenoid",  False)),
