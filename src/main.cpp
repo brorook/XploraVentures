@@ -20,7 +20,7 @@ static float g_hysteresis = 0.5f;
 // ── PT1000 ────────────────────────────────────────────────────────────────────
 #define PT1000_R_NOM    1000.0f
 #define PT1000_R_REF    4000.0f
-static Adafruit_MAX31865 g_rtd(PT1000_B1_CH2_CS, SPI_MOSI, SPI_MISO, SPI_SCK);
+static Adafruit_MAX31865 g_rtd(PT1000_B2_CH1_CS, SPI_MOSI, SPI_MISO, SPI_SCK);
 static float    g_rtd_temp  = NAN;
 static uint8_t  g_rtd_fault = 0;
 
