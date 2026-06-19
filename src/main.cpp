@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <SPI.h>
+#include <Adafruit_MAX31865.h>
 #include <ArduinoJson.h>
 #include <SensirionI2cSht4x.h>
 
@@ -14,6 +16,13 @@
 // ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
 static float g_setpoint   = 0.0f;
 static float g_hysteresis = 0.5f;
+
+// ── PT1000 ────────────────────────────────────────────────────────────────────
+#define PT1000_R_NOM    1000.0f
+#define PT1000_R_REF    4000.0f
+static Adafruit_MAX31865 g_rtd(PT1000_B1_CH2_CS, SPI_MOSI, SPI_MISO, SPI_SCK);
+static float    g_rtd_temp  = NAN;
+static uint8_t  g_rtd_fault = 0;
 
 // ── Sensor state ──────────────────────────────────────────────────────────────
 static float g_t1 = 0.0f, g_h1 = 0.0f;   // SHT45 Channel 1 (mux 0)
@@ -82,10 +91,21 @@ static bool sht4xRead(float &temp, float &hum) {
     return true;
 }
 
+static void readPT1000() {
+    g_rtd_fault = g_rtd.readFault();
+    if (g_rtd_fault) {
+        g_rtd.clearFault();
+        g_rtd_temp = NAN;
+    } else {
+        g_rtd_temp = g_rtd.temperature(PT1000_R_NOM, PT1000_R_REF);
+    }
+}
+
 static void readSensors() {
     muxSelect(0); delay(2); sht4xRead(g_t1, g_h1);
     muxSelect(2); delay(2); sht4xRead(g_t3, g_h3);
     muxDeselect();
+    readPT1000();
 }
 
 // =============================================================================
@@ -107,6 +127,8 @@ static void emitTelemetry() {
     doc["sht1"]["h"]  = roundf(g_h1 * 10) / 10.0f;
     doc["sht3"]["t"]  = roundf(g_t3 * 10) / 10.0f;
     doc["sht3"]["h"]  = roundf(g_h3 * 10) / 10.0f;
+    if (isnan(g_rtd_temp)) doc["rtd"] = nullptr;
+    else                   doc["rtd"] = roundf(g_rtd_temp * 10) / 10.0f;
     doc["heater"]     = g_heater;
     doc["solenoid"]   = g_solenoid;
     doc["solenoid2"]  = g_solenoid2;
@@ -156,6 +178,8 @@ void setup() {
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(400000);
     g_sht4x.begin(Wire, SHT45_ADDR);
+
+    g_rtd.begin(MAX31865_3WIRE);
 
     pinMode(LED_HB,   OUTPUT);
     pinMode(LED_SD,   OUTPUT); digitalWrite(LED_SD,   LOW);
