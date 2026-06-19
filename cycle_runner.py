@@ -236,7 +236,7 @@ class CycleRunner:
                     if rtd is not None:
                         if at_temp_since is None and rtd >= self._current_charge_sp:
                             at_temp_since = time.monotonic()
-                        elif at_temp_since is not None and rtd < self._current_charge_sp - 2:
+                        elif at_temp_since is not None and rtd < self._current_charge_sp - 10:
                             # Check duration BEFORE resetting — a dip right at the end
                             # must not cancel a completed soak.
                             if int(time.monotonic() - at_temp_since) >= self._charge_dur_s:
