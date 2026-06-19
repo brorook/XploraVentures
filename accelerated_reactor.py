@@ -139,6 +139,8 @@ def _on_telemetry(data: dict):
     if "sht3" in data:
         cycle_runner.last_t3 = data["sht3"].get("t")
         cycle_runner.last_h3 = data["sht3"].get("h")
+    if "rtd" in data:
+        cycle_runner.last_rtd = data["rtd"]
     if db:
         now = time.monotonic()
         if now - _last_db_telemetry >= 10.0:  # throttle to ~6/min to stay within Supabase free tier

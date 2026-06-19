@@ -26,6 +26,7 @@ class CycleRunner:
         self.last_t3 = None
         self.last_h1 = None
         self.last_h3 = None
+        self.last_rtd = None
         self._paused_phase = None
         self._current_charge_sp = 0.0
         self._charge_dur_s = 0
@@ -265,7 +266,7 @@ class CycleRunner:
                     break
 
             # COOLDOWN ────────────────────────────────────────────────────────
-            # Ends when outlet temp (T3) <= inlet temp (T1) - cooldown_dt
+            # Ends when RTD temp <= inlet temp (T1) + cooldown_dt
             self._set_phase("cooling", n)
             with self._lock:
                 self._status["mass_flux_g_min"] = 0.0
@@ -273,13 +274,13 @@ class CycleRunner:
             self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": 0})
             while not self._stop_evt.is_set():
-                t1 = self.last_t1
-                t3 = self.last_t3
-                diff = round(t3 - t1, 1) if (t1 is not None and t3 is not None) else 0.0
+                t1  = self.last_t1
+                rtd = self.last_rtd
+                diff = round(rtd - t1, 1) if (t1 is not None and rtd is not None) else 0.0
                 with self._lock:
                     self._status["delta_t_live"] = diff
                 self._emit()
-                if t1 is not None and t3 is not None and t3 <= t1 + self._cooldown_dt:
+                if t1 is not None and rtd is not None and rtd <= t1 + self._cooldown_dt:
                     break
                 self._tick()
 

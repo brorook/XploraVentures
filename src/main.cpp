@@ -11,7 +11,7 @@
 #define FW_VERSION      "1.3.0-ar"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
-#define TELEMETRY_MS    10000
+#define TELEMETRY_MS    2000
 
 // ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
 static float g_setpoint   = 0.0f;
@@ -113,8 +113,9 @@ static void readSensors() {
 // =============================================================================
 
 static void updateHeater() {
-    if (!g_heater && g_t3 < g_setpoint - g_hysteresis) setMosfet(0, true);
-    if ( g_heater && g_t3 >= g_setpoint)               setMosfet(0, false);
+    if (isnan(g_rtd_temp)) { setMosfet(0, false); return; }  // RTD fault → heater off
+    if (!g_heater && g_rtd_temp < g_setpoint - g_hysteresis) setMosfet(0, true);
+    if ( g_heater && g_rtd_temp >= g_setpoint)               setMosfet(0, false);
 }
 
 // =============================================================================
