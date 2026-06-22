@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include <ModbusMaster.h>
 
 #include "pin_definitions.h"
@@ -19,6 +20,14 @@ void postTransmission() { digitalWrite(RS485_DIR, LOW);  }
 
 void setup()
 {
+    // PCF8575 powers on with all pins HIGH → all MOSFETs fire before firmware runs.
+    // Write all-LOW immediately to suppress this before anything else.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.beginTransmission(PCF8575_ADDR);
+    Wire.write(0x00);   // Port 0: all low
+    Wire.write(0x00);   // Port 1: all low
+    Wire.endTransmission();
+
     Serial.begin(115200);
     while (!Serial) {}
     Serial.println("PFLOW3008 RS485 test");
