@@ -4,14 +4,20 @@
 #include <Adafruit_MAX31865.h>
 #include <ArduinoJson.h>
 #include <SensirionI2cSht4x.h>
+#include <ModbusMaster.h>
 
 #include "pin_definitions.h"
 
 // ── Version ───────────────────────────────────────────────────────────────────
-#define FW_VERSION      "1.3.0-ar"
+#define FW_VERSION      "1.4.0-ar"
 
 // ── Timing ────────────────────────────────────────────────────────────────────
 #define TELEMETRY_MS    2000
+
+// ── PFLOW3008 RS485 ───────────────────────────────────────────────────────────
+#define PFLOW_BAUD      38400
+#define PFLOW_SLAVE_ID  1
+#define REG_FLOW_HI     0x003A
 
 // ── Heater setpoint and hysteresis (°C) ──────────────────────────────────────
 static float g_setpoint   = 0.0f;
@@ -36,6 +42,26 @@ static String             g_rxBuf;
 static uint8_t            g_pcf_p0 = 0x00;
 static uint8_t            g_pcf_p1 = 0x00;
 static SensirionI2cSht4x  g_sht4x;
+static ModbusMaster       g_pflow;
+static float              g_flow_slpm = NAN;
+
+// =============================================================================
+// PFLOW3008 — RS485 Modbus RTU
+// =============================================================================
+
+static void pfPreTx()  { digitalWrite(RS485_DIR, HIGH); }
+static void pfPostTx() { digitalWrite(RS485_DIR, LOW);  }
+
+static void readFlow() {
+    uint8_t res = g_pflow.readHoldingRegisters(REG_FLOW_HI, 2);
+    if (res == g_pflow.ku8MBSuccess) {
+        uint32_t raw = ((uint32_t)g_pflow.getResponseBuffer(0) << 16)
+                      | g_pflow.getResponseBuffer(1);
+        g_flow_slpm = raw / 1000.0f;
+    } else {
+        g_flow_slpm = NAN;
+    }
+}
 
 // =============================================================================
 // PCF8575 / MOSFET
@@ -106,6 +132,7 @@ static void readSensors() {
     muxSelect(2); delay(2); sht4xRead(g_t3, g_h3);
     muxDeselect();
     readPT1000();
+    readFlow();
 }
 
 // =============================================================================
@@ -135,6 +162,8 @@ static void emitTelemetry() {
     doc["solenoid2"]  = g_solenoid2;
     doc["setpoint"]   = roundf(g_setpoint   * 10) / 10.0f;
     doc["hysteresis"] = roundf(g_hysteresis * 10) / 10.0f;
+    if (isnan(g_flow_slpm)) doc["flow_slpm"] = nullptr;
+    else                    doc["flow_slpm"] = roundf(g_flow_slpm * 1000) / 1000.0f;
     doc["fw"]         = FW_VERSION;
     serializeJson(doc, Serial);
     Serial.print('\n');
@@ -181,6 +210,13 @@ void setup() {
     g_sht4x.begin(Wire, SHT45_ADDR);
 
     g_rtd.begin(MAX31865_3WIRE);
+
+    pinMode(RS485_DIR, OUTPUT);
+    digitalWrite(RS485_DIR, LOW);
+    Serial2.begin(PFLOW_BAUD, SERIAL_8N1, RS485_RX, RS485_TX);
+    g_pflow.begin(PFLOW_SLAVE_ID, Serial2);
+    g_pflow.preTransmission(pfPreTx);
+    g_pflow.postTransmission(pfPostTx);
 
     pinMode(LED_HB,   OUTPUT);
     pinMode(LED_SD,   OUTPUT); digitalWrite(LED_SD,   LOW);
