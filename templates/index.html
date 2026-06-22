@@ -228,7 +228,7 @@
   <div class="card" style="margin-bottom:16px">
     <h3>Thermochemical Storage Cycle
       <span style="font-size:0.7rem;color:#4b5563;font-weight:400;margin-left:6px">
-        drag <span style="color:#ef4444">●</span> to set charge temp
+        drag <span style="color:#ef4444">●</span> to set regen temp
       </span>
     </h3>
 
@@ -236,13 +236,13 @@
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px">
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge temp (°C)</div>
-        <input type="number" id="cpChargeTemp" value="120" step="1" min="50" max="200"
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Regen temp (°C)</div>
+        <input type="number" id="cpRegenTemp" value="120" step="1" min="50" max="200"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Charge duration (min)</div>
-        <input type="number" id="cpChargeDurMin" value="120" step="5" min="1"
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Regen end ΔAH (g/m³)</div>
+        <input type="number" id="cpRegenEndDH" value="1.0" step="0.1" min="0.1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
@@ -251,7 +251,7 @@
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔH (g/m³)</div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Discharge end ΔAH (g/m³)</div>
         <input type="number" id="cpDischargeDH" value="1.5" step="0.5" min="0.1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
@@ -275,21 +275,6 @@
         <input type="number" id="cpWetWeight" placeholder="after discharge" step="0.001" min="0"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
       </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Post-dry weight (g)</div>
-        <input type="number" id="cpPostDryWeight" placeholder="after charge" step="0.001" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Flow — discharge (L/min)</div>
-        <input type="number" id="cpFlowDis" placeholder="e.g. 2.5" step="0.1" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Flow — charge (L/min)</div>
-        <input type="number" id="cpFlowChg" placeholder="e.g. 2.5" step="0.1" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
-      </div>
     </div>
 
     <!-- Action + live status row -->
@@ -297,7 +282,7 @@
       <button class="btn success" onclick="cycleStart()">Start</button>
       <select id="cpStartPhase" style="font-size:0.8rem;background:#1e2130;color:#9ba3af;border:1px solid #3a3d4a;border-radius:4px;padding:3px 8px;cursor:pointer">
         <option value="discharging">Start: Discharge</option>
-        <option value="charging">Start: Charge</option>
+        <option value="regenerating">Start: Regen</option>
         <option value="cooling">Start: Cooldown</option>
       </select>
       <button class="btn ghost" id="cpUpdateBtn" onclick="cycleUpdate()" style="display:none">Update params</button>
@@ -306,7 +291,7 @@
       <div style="display:flex;align-items:center;gap:6px;margin-left:6px">
         <div id="cpSoak" class="cp-box">DISCHARGE</div>
         <span class="cp-arrow">→</span>
-        <div id="cpHeat" class="cp-box">CHARGE</div>
+        <div id="cpHeat" class="cp-box">REGEN</div>
         <span class="cp-arrow">→</span>
         <div id="cpCool" class="cp-box">COOLDOWN</div>
       </div>
@@ -621,11 +606,11 @@ function applyAxisRanges() {
 
 // ── Thermochemical Storage Cycle canvas editor ────────────────────────────────
 const CP_COLORS = { Heat: "#ef4444", Cool: "#3b82f6", Soak: "#06b6d4" };
-const CP_MAP    = { charging: "Heat", cooling: "Cool", discharging: "Soak" };
+const CP_MAP    = { regenerating: "Heat", cooling: "Cool", discharging: "Soak" };
 
 const cp = {
   cvs: document.getElementById('cycleCanvas'),
-  p: { charge_sp: 120, charge_dur_min: 120, discharge_dh: 1.5, cooldown_dt: 2.0 },
+  p: { charge_sp: 120, regen_end_dh: 1.0, discharge_dh: 1.5, cooldown_dt: 2.0 },
   drag: null, dragRange: null,
 };
 cp.ctx = cp.cvs.getContext('2d');
@@ -667,7 +652,7 @@ function cpDraw() {
   // Phase labels
   c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
   c.fillText('DISCHARGE',                       (chargeX+cooldownX)/2,    CPL.t+5);
-  c.fillText(`CHARGE  ${p.charge_dur_min}m`,     (cooldownX+dischargeX)/2, CPL.t+5);
+  c.fillText(`REGEN  ΔAH≤${p.regen_end_dh}g`,    (cooldownX+dischargeX)/2, CPL.t+5);
   c.fillText('COOLDOWN',                        (dischargeX+rightX)/2,    CPL.t+5);
 
   // Charge setpoint reference line
@@ -760,15 +745,15 @@ window.addEventListener('mousemove', e => {
 window.addEventListener('mouseup', () => { cp.drag = null; });
 
 function cpSyncToInputs() {
-  document.getElementById('cpChargeTemp').value  = cp.p.charge_sp;
-  document.getElementById('cpChargeDurMin').value  = cp.p.charge_dur_min;
+  document.getElementById('cpRegenTemp').value  = cp.p.charge_sp;
+  document.getElementById('cpRegenEndDH').value  = cp.p.regen_end_dh;
   document.getElementById('cpDischargeDH').value = cp.p.discharge_dh;
   document.getElementById('cpCooldownDT').value  = cp.p.cooldown_dt;
 }
 
 function cpSyncFromInputs() {
-  cp.p.charge_sp    = parseFloat(document.getElementById('cpChargeTemp').value) || 120;
-  cp.p.charge_dur_min = parseFloat(document.getElementById('cpChargeDurMin').value) || 120;
+  cp.p.charge_sp    = parseFloat(document.getElementById('cpRegenTemp').value) || 120;
+  cp.p.regen_end_dh = parseFloat(document.getElementById('cpRegenEndDH').value) || 1.0;
   cp.p.discharge_dh = parseFloat(document.getElementById('cpDischargeDH').value) || 1.5;
   cp.p.cooldown_dt  = parseFloat(document.getElementById('cpCooldownDT').value)  || 2.0;
   cpDraw();
@@ -787,19 +772,13 @@ socket.on("cycle_status", d => {
     el.style.boxShadow   = active ? `0 0 10px ${CP_COLORS[n]}55` : "none";
   });
 
-  const soakBar = document.getElementById("cpSoakBar");
-  const params  = d.params || {};
-  if (d.phase === "charging" && params.charge_dur_s > 0) {
-    soakBar.style.display = "";
-    const pct = Math.min(100, (d.elapsed_s / params.charge_dur_s) * 100).toFixed(1);
-    document.getElementById("cpSoakFill").style.width = pct + "%";
-    const m = Math.floor(d.elapsed_s / 60), s = d.elapsed_s % 60;
-    const tm = Math.floor(params.charge_dur_s / 60);
-    document.getElementById("cpSoakLabel").textContent = `${m}m ${s}s / ${tm}m`;
-  } else { soakBar.style.display = "none"; }
+  document.getElementById("cpSoakBar").style.display = "none";
 
   const dtEl = document.getElementById("cpDischargeDT");
   if (d.phase === "discharging") {
+    dtEl.style.display = "";
+    dtEl.textContent   = `ΔAH = ${(d.delta_h_live ?? 0).toFixed(2)} g/m³`;
+  } else if (d.phase === "regenerating") {
     dtEl.style.display = "";
     dtEl.textContent   = `ΔAH = ${(d.delta_h_live ?? 0).toFixed(2)} g/m³`;
   } else if (d.phase === "cooling") {
@@ -841,7 +820,7 @@ socket.on("cycle_status", d => {
   else                            { doneLabel.style.display="none"; }
 
   const massFluxEl = document.getElementById("cpMassFlux");
-  if (d.phase === "discharging" || d.phase === "charging") {
+  if (d.phase === "discharging" || d.phase === "regenerating") {
     massFluxEl.style.display = "";
     document.getElementById("cpFluxVal").textContent = (d.mass_flux_g_min ?? 0).toFixed(4);
     const dryW = parseFloat(document.getElementById("cpDryWeight").value);
@@ -865,13 +844,11 @@ socket.on("cycle_status", d => {
 async function cycleStart() {
   const body = {
     charge_sp:      cp.p.charge_sp,
-    charge_dur_s:   Math.round(cp.p.charge_dur_min * 60),
+    regen_end_dh:   cp.p.regen_end_dh,
     num_cycles:     parseInt(document.getElementById("cpCycles").value),
     discharge_dh:   cp.p.discharge_dh,
     cooldown_dt:    cp.p.cooldown_dt,
     dry_weight:     parseFloat(document.getElementById("cpDryWeight").value)  || null,
-    flow_discharge: parseFloat(document.getElementById("cpFlowDis").value)    || null,
-    flow_charge:      parseFloat(document.getElementById("cpFlowChg").value)      || null,
     min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
     start_phase:      document.getElementById("cpStartPhase").value,
   };
@@ -891,31 +868,23 @@ async function cycleStop() {
 async function cycleUpdate() {
   const body = {
     charge_sp:    cp.p.charge_sp,
-    charge_dur_s: Math.round(cp.p.charge_dur_min * 60),
+    regen_end_dh: cp.p.regen_end_dh,
     num_cycles:   parseInt(document.getElementById("cpCycles").value),
     discharge_dh: cp.p.discharge_dh,
     cooldown_dt:  cp.p.cooldown_dt,
   };
-  const wetW    = parseFloat(document.getElementById("cpWetWeight").value);
-  const postDry = parseFloat(document.getElementById("cpPostDryWeight").value);
-  if (!isNaN(wetW))    body.wet_weight_g      = wetW;
-  if (!isNaN(postDry)) body.post_dry_weight_g = postDry;
+  const wetW = parseFloat(document.getElementById("cpWetWeight").value);
+  if (!isNaN(wetW)) body.wet_weight_g = wetW;
   await fetch("/api/cycle/update", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
 }
 
 function cpUpdateGravimetric() {
-  const dry     = parseFloat(document.getElementById("cpDryWeight").value);
-  const wet     = parseFloat(document.getElementById("cpWetWeight").value);
-  const postDry = parseFloat(document.getElementById("cpPostDryWeight").value);
-  const el      = document.getElementById("cpGravimetric");
+  const dry    = parseFloat(document.getElementById("cpDryWeight").value);
+  const wet    = parseFloat(document.getElementById("cpWetWeight").value);
+  const el     = document.getElementById("cpGravimetric");
   if (isNaN(dry) || dry <= 0 || isNaN(wet) || wet <= dry) { el.style.display = "none"; return; }
   const uptake = wet - dry;
   const parts  = [`Uptake: ${uptake.toFixed(3)} g (${((uptake/dry)*100).toFixed(1)}% w/w)`];
-  if (!isNaN(postDry) && postDry > 0 && postDry < wet) {
-    const released = wet - postDry;
-    parts.push(`Released: ${released.toFixed(3)} g (${((released/dry)*100).toFixed(1)}% w/w)`);
-    parts.push(`Regen: ${((released/uptake)*100).toFixed(1)}%`);
-  }
   el.style.display = "";
   el.textContent   = parts.join("  |  ");
 }

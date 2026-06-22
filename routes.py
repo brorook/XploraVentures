@@ -72,7 +72,7 @@ def create_blueprint(
         body = request.json or {}
         params = {
             "charge_sp":      float(body.get("charge_sp",    120)),
-            "charge_dur_s":   int(body.get("charge_dur_s",  7200)),
+            "regen_end_dh":   float(body.get("regen_end_dh",  1.0)),
             "num_cycles":     int(body.get("num_cycles",        1)),
             "discharge_dh":   float(body.get("discharge_dh",    1.5)),
             "cooldown_dt":    float(body.get("cooldown_dt",    2.0)),
@@ -97,7 +97,7 @@ def create_blueprint(
         body = request.json or {}
         params = {}
         if "charge_sp"         in body: params["charge_sp"]         = float(body["charge_sp"])
-        if "charge_dur_s"      in body: params["charge_dur_s"]      = int(body["charge_dur_s"])
+        if "regen_end_dh"      in body: params["regen_end_dh"]      = float(body["regen_end_dh"])
         if "num_cycles"        in body: params["num_cycles"]         = int(body["num_cycles"])
         if "discharge_dh"      in body: params["discharge_dh"]      = float(body["discharge_dh"])
         if "cooldown_dt"       in body: params["cooldown_dt"]        = float(body["cooldown_dt"])

@@ -29,7 +29,7 @@ class CycleRunner:
         self.last_rtd = None
         self._paused_phase = None
         self._current_charge_sp = 0.0
-        self._charge_dur_s = 0
+        self._regen_end_dh = 1.0
         self._num_cycles = 0
         self._discharge_dh = 0.0
         self._cooldown_dt = 0.0
@@ -39,7 +39,7 @@ class CycleRunner:
         self._flow_discharge = None
         self._flow_charge = None
 
-    def start(self, charge_sp: float, charge_dur_s: int, num_cycles: int,
+    def start(self, charge_sp: float, regen_end_dh: float, num_cycles: int,
               discharge_dh: float = 1.5, cooldown_dt: float = 2.0,
               min_discharge_s: int = 600,
               dry_weight: float = None, flow_discharge: float = None, flow_charge: float = None,
@@ -47,7 +47,7 @@ class CycleRunner:
         if self._thread and self._thread.is_alive():
             return False, "already running"
         self._current_charge_sp = charge_sp
-        self._charge_dur_s      = charge_dur_s
+        self._regen_end_dh      = regen_end_dh
         self._num_cycles        = num_cycles
         self._discharge_dh      = discharge_dh
         self._cooldown_dt       = cooldown_dt
@@ -59,7 +59,7 @@ class CycleRunner:
         self._pause_evt.clear()
         self._thread = threading.Thread(
             target=self._run,
-            kwargs=dict(charge_sp=charge_sp, charge_dur_s=charge_dur_s, num_cycles=num_cycles,
+            kwargs=dict(charge_sp=charge_sp, regen_end_dh=regen_end_dh, num_cycles=num_cycles,
                         discharge_dh=discharge_dh, cooldown_dt=cooldown_dt,
                         min_discharge_s=min_discharge_s, start_phase=start_phase),
             daemon=True,
@@ -92,7 +92,7 @@ class CycleRunner:
             self._send({"cmd": "solenoid",  "on": True})
             self._send({"cmd": "solenoid2", "on": False})
             self._send({"cmd": "set_sp",    "val": 0})
-        elif phase == "charging":
+        elif phase == "regenerating":
             self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
         elif phase == "cooling":
@@ -103,15 +103,15 @@ class CycleRunner:
         self._pause_evt.clear()
         self._emit()
 
-    def update_params(self, charge_sp=None, charge_dur_s=None, num_cycles=None,
+    def update_params(self, charge_sp=None, regen_end_dh=None, num_cycles=None,
                       discharge_dh=None, cooldown_dt=None,
                       wet_weight_g=None, post_dry_weight_g=None):
         if charge_sp is not None:
             self._current_charge_sp = float(charge_sp)
-            if self._status["phase"] == "charging":
+            if self._status["phase"] == "regenerating":
                 self._send({"cmd": "set_sp", "val": self._current_charge_sp})
-        if charge_dur_s is not None:
-            self._charge_dur_s = int(charge_dur_s)
+        if regen_end_dh is not None:
+            self._regen_end_dh = float(regen_end_dh)
         if num_cycles is not None:
             self._num_cycles = max(1, int(num_cycles))
             with self._lock:
@@ -127,7 +127,7 @@ class CycleRunner:
         with self._lock:
             self._status["params"] = {
                 "charge_sp":    self._current_charge_sp,
-                "charge_dur_s": self._charge_dur_s,
+                "regen_end_dh": self._regen_end_dh,
                 "discharge_dh": self._discharge_dh,
                 "cooldown_dt":  self._cooldown_dt,
             }
@@ -159,12 +159,12 @@ class CycleRunner:
             time.sleep(0.2)
         return time.monotonic() - t0
 
-    def _run(self, charge_sp, charge_dur_s, num_cycles, discharge_dh, cooldown_dt, min_discharge_s=600, start_phase="discharging"):
+    def _run(self, charge_sp, regen_end_dh, num_cycles, discharge_dh, cooldown_dt, min_discharge_s=600, start_phase="discharging"):
         with self._lock:
             self._status.update({
                 "total": num_cycles, "elapsed_s": 0,
                 "delta_t_live": 0.0, "delta_h_live": 0.0,
-                "params": {"charge_sp": self._current_charge_sp, "charge_dur_s": self._charge_dur_s,
+                "params": {"charge_sp": self._current_charge_sp, "regen_end_dh": self._regen_end_dh,
                            "discharge_dh": self._discharge_dh, "cooldown_dt": self._cooldown_dt},
             })
 
@@ -175,7 +175,7 @@ class CycleRunner:
                 break
 
             # DISCHARGE ───────────────────────────────────────────────────────
-            if not (n == 1 and start_phase in ("charging", "cooling")):
+            if not (n == 1 and start_phase in ("regenerating", "cooling")):
                 # Ends after min_discharge_s when inlet-outlet AH delta <= discharge_dh (bed saturated)
                 self._set_phase("discharging", n)
                 self._send({"cmd": "solenoid",  "on": True})
@@ -217,10 +217,10 @@ class CycleRunner:
                 if self._stop_evt.is_set():
                     break
 
-            # CHARGE ──────────────────────────────────────────────────────────
-            # Ends when RTD >= charge_sp AND sustained continuously for charge_dur_s
+            # REGENERATION ────────────────────────────────────────────────────
+            # Ends when RTD >= charge_sp AND outlet-inlet AH delta <= regen_end_dh
             if not (n == 1 and start_phase == "cooling"):
-                self._set_phase("charging", n)
+                self._set_phase("regenerating", n)
                 with self._lock:
                     self._status["elapsed_s"]        = 0
                     self._status["delta_h_live"]     = 0.0
@@ -228,40 +228,36 @@ class CycleRunner:
                     self._status["mass_flux_g_min"]  = 0.0
                 self._send({"cmd": "solenoid2", "on": True})
                 self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
-                at_temp_since = None
+                t_regen = time.monotonic()
+                pause_offset = 0.0
                 while not self._stop_evt.is_set():
                     t1, h1 = self.last_t1, self.last_h1
                     t3, h3 = self.last_t3, self.last_h3
                     rtd = self.last_rtd
-                    if rtd is not None:
-                        if at_temp_since is None and rtd >= self._current_charge_sp:
-                            at_temp_since = time.monotonic()
-                        elif at_temp_since is not None and rtd < self._current_charge_sp - 10:
-                            # Check duration BEFORE resetting — a dip right at the end
-                            # must not cancel a completed soak.
-                            if int(time.monotonic() - at_temp_since) >= self._charge_dur_s:
-                                break
-                            at_temp_since = None
-                            with self._lock:
-                                self._status["elapsed_s"] = 0
-                            self._emit()
-                        if at_temp_since is not None:
-                            elapsed_at = int(time.monotonic() - at_temp_since)
-                            with self._lock:
-                                self._status["elapsed_s"] = elapsed_at
-                            self._emit()
-                            if elapsed_at >= self._charge_dur_s:
-                                break
-                    if self._flow_charge and all(v is not None for v in (t1, h1, t3, h3)):
+                    elapsed = int(time.monotonic() - t_regen - pause_offset)
+                    have_all = all(v is not None for v in (t1, h1, t3, h3))
+                    if have_all:
                         ah1 = _abs_humidity(t1, h1)
                         ah3 = _abs_humidity(t3, h3)
-                        flux = self._flow_charge * max(0.0, ah3 - ah1) / 1000.0
-                        with self._lock:
-                            self._status["water_released_g"] += flux * (2.0 / 60.0)
-                            self._status["mass_flux_g_min"]   = round(flux, 4)
+                        delta_h = round(ah3 - ah1, 2)
+                        if self._flow_charge:
+                            flux = self._flow_charge * max(0.0, ah3 - ah1) / 1000.0
+                            with self._lock:
+                                self._status["water_released_g"] += flux * (2.0 / 60.0)
+                                self._status["mass_flux_g_min"]   = round(flux, 4)
+                    else:
+                        ah1 = ah3 = None
+                        delta_h = 0.0
+                    with self._lock:
+                        self._status["elapsed_s"]    = elapsed
+                        self._status["delta_h_live"] = delta_h
+                    self._emit()
+                    if have_all and rtd is not None and rtd >= self._current_charge_sp and delta_h <= self._regen_end_dh:
+                        break
+                    if elapsed > 21600:  # 6-hour safety timeout
+                        break
                     paused_s = self._tick()
-                    if at_temp_since is not None:
-                        at_temp_since += paused_s  # freeze the soak timer while paused
+                    pause_offset += paused_s
 
                 if self._stop_evt.is_set():
                     break
