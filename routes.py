@@ -78,9 +78,11 @@ def create_blueprint(
             "cooldown_dt":    float(body.get("cooldown_dt",    2.0)),
             "min_discharge_s": int(body.get("min_discharge_s", 600)),
             "start_phase":    body.get("start_phase", "discharging"),
-            "dry_weight":     float(body["dry_weight"])     if body.get("dry_weight")     else None,
-            "flow_discharge": float(body["flow_discharge"]) if body.get("flow_discharge") else None,
-            "flow_charge":    float(body["flow_charge"])    if body.get("flow_charge")    else None,
+            "dry_weight":      float(body["dry_weight"])      if body.get("dry_weight")      else None,
+            "flow_discharge":  float(body["flow_discharge"])  if body.get("flow_discharge")  else None,
+            "flow_charge":     float(body["flow_charge"])     if body.get("flow_charge")     else None,
+            "heater_voltage":  float(body["heater_voltage"])  if body.get("heater_voltage")  else None,
+            "heater_current":  float(body["heater_current"])  if body.get("heater_current")  else None,
         }
         if db:
             run_id_holder["id"] = db.start_cycle_run(params)

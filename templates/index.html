@@ -275,6 +275,16 @@
         <input type="number" id="cpWetWeight" placeholder="after discharge" step="0.001" min="0"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
       </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Heater voltage (V)</div>
+        <input type="number" id="cpHeaterV" value="24" step="0.1" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
+      <div>
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Heater current (A)</div>
+        <input type="number" id="cpHeaterA" value="1.7" step="0.01" min="0"
+          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
+      </div>
     </div>
 
     <!-- Action + live status row -->
@@ -317,6 +327,10 @@
       <span id="cpWaterLabel">Absorbed</span>: <span id="cpWaterVal">--</span> g
       <span id="cpWaterPct" style="color:#6b7280"></span>
       <span id="cpRegenEff" style="color:#34d399"></span>
+    </div>
+    <div id="cpEnergy" style="display:none;font-size:0.82rem;color:#fb923c;margin-top:4px">
+      Heater: <span id="cpPowerW">--</span> W &nbsp;|&nbsp;
+      Energy (regen): <span id="cpEnergyWh">--</span> Wh &nbsp;(<span id="cpEnergyKJ">--</span> kJ)
     </div>
     <div id="cpGravimetric" style="display:none;font-size:0.82rem;color:#fbbf24;margin-top:6px"></div>
     <div id="cpLogFile" style="display:none;font-size:0.75rem;color:#6b7280;margin-top:8px">
@@ -839,9 +853,25 @@ socket.on("cycle_status", d => {
   } else {
     massFluxEl.style.display = "none";
   }
+
+  const energyEl = document.getElementById("cpEnergy");
+  const heaterV  = parseFloat(document.getElementById("cpHeaterV").value);
+  const heaterA  = parseFloat(document.getElementById("cpHeaterA").value);
+  if (d.phase === "regenerating" && !isNaN(heaterV) && !isNaN(heaterA)) {
+    energyEl.style.display = "";
+    const powerW   = heaterV * heaterA;
+    const energyWh = d.regen_energy_wh ?? 0;
+    document.getElementById("cpPowerW").textContent  = powerW.toFixed(1);
+    document.getElementById("cpEnergyWh").textContent = energyWh.toFixed(3);
+    document.getElementById("cpEnergyKJ").textContent = (energyWh * 3.6).toFixed(2);
+  } else {
+    energyEl.style.display = "none";
+  }
 });
 
 async function cycleStart() {
+  const heaterV = parseFloat(document.getElementById("cpHeaterV").value);
+  const heaterA = parseFloat(document.getElementById("cpHeaterA").value);
   const body = {
     charge_sp:      cp.p.charge_sp,
     regen_end_dh:   cp.p.regen_end_dh,
@@ -851,6 +881,8 @@ async function cycleStart() {
     dry_weight:     parseFloat(document.getElementById("cpDryWeight").value)  || null,
     min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
     start_phase:      document.getElementById("cpStartPhase").value,
+    heater_voltage:   isNaN(heaterV) ? null : heaterV,
+    heater_current:   isNaN(heaterA) ? null : heaterA,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();

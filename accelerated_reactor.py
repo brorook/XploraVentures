@@ -126,6 +126,7 @@ def _on_telemetry(data: dict):
     enriched["_mass_flux_g_min"]  = status.get("mass_flux_g_min", "")
     enriched["_water_absorbed_g"] = status.get("water_absorbed_g", "")
     enriched["_water_released_g"] = status.get("water_released_g", "")
+    enriched["_regen_energy_wh"]  = status.get("regen_energy_wh", "")
     t1 = data.get("sht1", {}).get("t"); h1 = data.get("sht1", {}).get("h")
     t3 = data.get("sht3", {}).get("t"); h3 = data.get("sht3", {}).get("h")
     if t1 is not None and h1 is not None:
@@ -141,6 +142,8 @@ def _on_telemetry(data: dict):
         cycle_runner.last_h3 = data["sht3"].get("h")
     if "rtd" in data:
         cycle_runner.last_rtd = data["rtd"]
+    if "heater" in data:
+        cycle_runner.last_heater = data["heater"]
     if db:
         now = time.monotonic()
         if now - _last_db_telemetry >= 10.0:  # throttle to ~6/min to stay within Supabase free tier
