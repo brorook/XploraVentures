@@ -28,7 +28,7 @@ from matplotlib.widgets import RadioButtons, CheckButtons, TextBox
 from matplotlib.patches import Patch
 import numpy as np
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "DATA")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "experimental data")
 
 COLOR_CH1_T  = "#e05252"
 COLOR_CH3_T  = "#e08c52"
@@ -51,7 +51,7 @@ def absolute_humidity(T_C, RH_pct):
 
 def load_csv(path):
     ts, ch1_t, ch1_h, ch3_t, ch3_h = [], [], [], [], []
-    heater, drier, humidifier, setpoint = [], [], [], []
+    heater, drier, humidifier, setpoint, flow_slpm = [], [], [], [], []
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -65,6 +65,8 @@ def load_csv(path):
                 drier.append(int(row["drier"]))
                 humidifier.append(int(row["humidifier"]))
                 setpoint.append(float(row["setpoint"]))
+                raw_flow = row.get("flow_slpm", "")
+                flow_slpm.append(float(raw_flow) if raw_flow != "" else float("nan"))
             except (ValueError, KeyError):
                 continue
     return {
@@ -72,6 +74,7 @@ def load_csv(path):
         "ch3_t": ch3_t, "ch3_h": ch3_h,
         "heater": heater, "drier": drier,
         "humidifier": humidifier, "setpoint": setpoint,
+        "flow_slpm": flow_slpm,
     }
 
 
@@ -443,11 +446,14 @@ class Viewer:
             if data[key][idx]
         )
         mass = self._y_water[idx] if idx < len(self._y_water) else float("nan")
+        flow_val = data["flow_slpm"][idx] if idx < len(data["flow_slpm"]) else float("nan")
+        flow_str = f"{flow_val:.3f} slpm" if not np.isnan(flow_val) else "—"
 
         tip = (
             f"{data['ts'][idx].strftime('%H:%M:%S')}  {state}\n"
             f"CH1  {data['ch1_t'][idx]:.1f} °C   {data['ch1_h'][idx]:.1f} %RH\n"
             f"CH3  {data['ch3_t'][idx]:.1f} °C   {data['ch3_h'][idx]:.1f} %RH\n"
+            f"Flow {flow_str}\n"
             f"Mass {mass:.4f} g"
         )
 

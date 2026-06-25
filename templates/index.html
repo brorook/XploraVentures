@@ -149,6 +149,7 @@
       <div class="sensor-val" id="ch1T">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="ch1H">Humidity: -- %</div>
       <div class="sensor-sub" id="ch1AH" style="margin-top:3px;color:#60a5fa">Abs. humidity: -- g/m³</div>
+      <div class="sensor-sub" id="ch1MR" style="margin-top:3px;color:#818cf8">Mix. ratio: -- g/kg</div>
     </div>
     <!-- Channel 3 -->
     <div class="card">
@@ -156,6 +157,7 @@
       <div class="sensor-val" id="ch3T">--<span class="sensor-unit"> °C</span></div>
       <div class="sensor-sub" id="ch3H">Humidity: -- %</div>
       <div class="sensor-sub" id="ch3AH" style="margin-top:3px;color:#fbbf24">Abs. humidity: -- g/m³</div>
+      <div class="sensor-sub" id="ch3MR" style="margin-top:3px;color:#fb923c">Mix. ratio: -- g/kg</div>
     </div>
     <!-- PT1000 RTD -->
     <div class="card">
@@ -418,6 +420,8 @@ const chart = new Chart(ctx, {
       { label: "RTD Temp (°C)",  yAxisID: "yT", data: [], borderColor: "#a78bfa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
       { label: "Chamber RH inferred (%)", yAxisID: "yH", data: [], borderColor: "#c084fc", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1, borderDash: [3,3], tension: 0.3 },
       { label: "Flow (SLPM)", yAxisID: "yF", data: [], borderColor: "#22d3ee", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
+      { label: "Ch1 Mix. Ratio (g/kg)", yAxisID: "yMR", data: [], borderColor: "#a78bfa", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
+      { label: "Ch3 Mix. Ratio (g/kg)", yAxisID: "yMR", data: [], borderColor: "#f97316", backgroundColor: "transparent", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
     ]
   },
   options: {
@@ -447,6 +451,10 @@ const chart = new Chart(ctx, {
       yF: {
         position: "right", title: { display: true, text: "Flow (SLPM)", color: "#22d3ee", font: { size: 11 } },
         ticks: { color: "#22d3ee", font: { size: 10 } }, grid: { drawOnChartArea: false }, min: 0
+      },
+      yMR: {
+        position: "right", title: { display: true, text: "Mix. Ratio (g/kg)", color: "#a78bfa", font: { size: 11 } },
+        ticks: { color: "#a78bfa", font: { size: 10 } }, grid: { drawOnChartArea: false }, min: 0
       }
     }
   }
@@ -468,6 +476,8 @@ function pushChart(t1, h1, t3, h3, sp, rtd, flow) {
   const rhChamber = (rtd != null) ? Math.min(100, absHumidity(t3, h3) / absHumidity(rtd, 100) * 100) : null;
   ds[8].data.push(rhChamber);
   ds[9].data.push(flow ?? null);
+  ds[10].data.push(t1 != null ? mixingRatio(t1, h1) : null);
+  ds[11].data.push(t3 != null ? mixingRatio(t3, h3) : null);
   if (labels.length > MAX_POINTS) {
     labels.shift();
     ds.forEach(d => d.data.shift());
@@ -488,12 +498,14 @@ socket.on("telemetry", d => {
     document.getElementById("ch1T").innerHTML = d.sht1.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
     document.getElementById("ch1H").textContent = "Humidity: " + d.sht1.h.toFixed(1) + " %";
     document.getElementById("ch1AH").textContent = "Abs. humidity: " + absHumidity(d.sht1.t, d.sht1.h).toFixed(2) + " g/m³";
+    document.getElementById("ch1MR").textContent = "Mix. ratio: " + mixingRatio(d.sht1.t, d.sht1.h).toFixed(2) + " g/kg";
   }
   // Channel 3
   if (d.sht3 !== undefined) {
     document.getElementById("ch3T").innerHTML = d.sht3.t.toFixed(1) + '<span class="sensor-unit"> °C</span>';
     document.getElementById("ch3H").textContent = "Humidity: " + d.sht3.h.toFixed(1) + " %";
     document.getElementById("ch3AH").textContent = "Abs. humidity: " + absHumidity(d.sht3.t, d.sht3.h).toFixed(2) + " g/m³";
+    document.getElementById("ch3MR").textContent = "Mix. ratio: " + mixingRatio(d.sht3.t, d.sht3.h).toFixed(2) + " g/kg";
   }
   // Heater + duty
   if (d.heater !== undefined) {
@@ -603,8 +615,14 @@ function setSolenoid2(on) { sendCmd({ cmd: "solenoid2", on }); }
 function setHeater(on)    { sendCmd({ cmd: "heater",    on }); }
 
 function absHumidity(t, rh) {
-  // Magnus formula: AH (g/m³) = 216.7 × (RH/100 × 6.112 × e^(17.67T/(T+243.5))) / (T+273.15)
-  return 216.7 * (rh / 100 * 6.112 * Math.exp(17.67 * t / (t + 243.5))) / (t + 273.15);
+  rh = Math.max(0, Math.min(rh, 100));
+  return 216.7 * (rh / 100 * 6.112 * Math.exp(17.62 * t / (243.12 + t))) / (273.15 + t);
+}
+
+function mixingRatio(t, rh, p = 1013.25) {
+  rh = Math.max(0, Math.min(rh, 100));
+  const e = rh / 100 * 6.112 * Math.exp(17.62 * t / (243.12 + t));
+  return 622.0 * e / (p - e);
 }
 
 function applyAxisRanges() {

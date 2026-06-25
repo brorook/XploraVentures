@@ -15,19 +15,23 @@ class CsvLogger:
     def path(self) -> str | None:
         return self._path
 
+    _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "experimental data")
+
     def start(self) -> tuple[bool, str]:
         with self._lock:
             if self._writer:
                 return False, "already logging"
+            os.makedirs(self._DATA_DIR, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._path = f"accel_reactor_{ts}.csv"
+            self._path = os.path.join(self._DATA_DIR, f"accel_reactor_{ts}.csv")
             self._file = open(self._path, "w", newline="")
             self._writer = csv.writer(self._file)
             self._writer.writerow([
                 "timestamp", "phase",
-                "ch1_t", "ch1_h", "ch1_ah",
-                "ch3_t", "ch3_h", "ch3_ah",
+                "ch1_t", "ch1_h", "ch1_ah", "ch1_mr",
+                "ch3_t", "ch3_h", "ch3_ah", "ch3_mr",
                 "rtd_t",
+                "flow_slpm",
                 "mass_flux_g_min", "water_absorbed_g", "water_released_g",
                 "heater", "drier", "humidifier", "setpoint",
                 "dry_weight_g", "wet_weight_g", "post_dry_weight_g",
@@ -47,9 +51,10 @@ class CsvLogger:
             self._writer.writerow([
                 datetime.datetime.now().isoformat(),
                 data.get("_phase", ""),
-                data.get("sht1", {}).get("t", ""), data.get("sht1", {}).get("h", ""), data.get("_ah1", ""),
-                data.get("sht3", {}).get("t", ""), data.get("sht3", {}).get("h", ""), data.get("_ah3", ""),
+                data.get("sht1", {}).get("t", ""), data.get("sht1", {}).get("h", ""), data.get("_ah1", ""), data.get("_mr1", ""),
+                data.get("sht3", {}).get("t", ""), data.get("sht3", {}).get("h", ""), data.get("_ah3", ""), data.get("_mr3", ""),
                 data.get("rtd", ""),
+                data.get("flow_slpm", ""),
                 data.get("_mass_flux_g_min", ""), data.get("_water_absorbed_g", ""), data.get("_water_released_g", ""),
                 int(data.get("heater",    False)),
                 int(data.get("solenoid",  False)),

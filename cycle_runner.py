@@ -5,8 +5,16 @@ from typing import Callable
 
 
 def _abs_humidity(t_c: float, rh: float) -> float:
-    """Absolute humidity in g/m³ from temperature (°C) and relative humidity (%)."""
-    return 216.7 * (rh / 100.0 * 6.112 * math.exp(17.67 * t_c / (t_c + 243.5))) / (273.15 + t_c)
+    """Absolute humidity in g/m³ (Sensirion coefficients)."""
+    rh = max(0.0, min(rh, 100.0))
+    return 216.7 * (rh / 100.0 * 6.112 * math.exp(17.62 * t_c / (243.12 + t_c))) / (273.15 + t_c)
+
+
+def _mixing_ratio(t_c: float, rh: float, p_hpa: float = 1013.25) -> float:
+    """Mixing ratio in g/kg dry air (Sensirion coefficients, assumes standard pressure)."""
+    rh = max(0.0, min(rh, 100.0))
+    e = rh / 100.0 * 6.112 * math.exp(17.62 * t_c / (243.12 + t_c))
+    return 622.0 * e / (p_hpa - e)
 
 
 class CycleRunner:

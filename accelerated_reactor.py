@@ -24,7 +24,7 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO
 
 from serial_manager import SerialManager
-from cycle_runner import CycleRunner, _abs_humidity
+from cycle_runner import CycleRunner, _abs_humidity, _mixing_ratio
 from logger import CsvLogger
 from routes import create_blueprint
 
@@ -131,8 +131,10 @@ def _on_telemetry(data: dict):
     t3 = data.get("sht3", {}).get("t"); h3 = data.get("sht3", {}).get("h")
     if t1 is not None and h1 is not None:
         enriched["_ah1"] = round(_abs_humidity(t1, h1), 3)
+        enriched["_mr1"] = round(_mixing_ratio(t1, h1), 3)
     if t3 is not None and h3 is not None:
         enriched["_ah3"] = round(_abs_humidity(t3, h3), 3)
+        enriched["_mr3"] = round(_mixing_ratio(t3, h3), 3)
     csv_logger.log_row(enriched)
     if "sht1" in data:
         cycle_runner.last_t1 = data["sht1"].get("t")
