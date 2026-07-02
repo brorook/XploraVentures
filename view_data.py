@@ -52,6 +52,7 @@ def absolute_humidity(T_C, RH_pct):
 def load_csv(path):
     ts, ch1_t, ch1_h, ch3_t, ch3_h = [], [], [], [], []
     heater, drier, humidifier, setpoint, flow_slpm = [], [], [], [], []
+    water_absorbed_g, water_released_g = [], []
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -67,6 +68,10 @@ def load_csv(path):
                 setpoint.append(float(row["setpoint"]))
                 raw_flow = row.get("flow_slpm", "")
                 flow_slpm.append(float(raw_flow) if raw_flow != "" else float("nan"))
+                raw_abs = row.get("water_absorbed_g", "")
+                water_absorbed_g.append(float(raw_abs) if raw_abs != "" else float("nan"))
+                raw_rel = row.get("water_released_g", "")
+                water_released_g.append(float(raw_rel) if raw_rel != "" else float("nan"))
             except (ValueError, KeyError):
                 continue
     return {
@@ -75,6 +80,8 @@ def load_csv(path):
         "heater": heater, "drier": drier,
         "humidifier": humidifier, "setpoint": setpoint,
         "flow_slpm": flow_slpm,
+        "water_absorbed_g": water_absorbed_g,
+        "water_released_g": water_released_g,
     }
 
 
@@ -157,6 +164,7 @@ class Viewer:
         self.m_wet      = 0.0   # g      (mass after humidification)
         self.m_post_dry = 0.0   # g      (mass after drying)
         self._session_weights = {}  # {idx: (m_dry, m_wet, m_post_dry)}
+        self._csv_peak_absorbed = float("nan")   # peak net uptake from CSV [g]
 
         # ── figure ────────────────────────────────────────────────────────────
         self.fig = plt.figure(figsize=(14, 7))
@@ -319,14 +327,27 @@ class Viewer:
                     self.span_collections.append(coll)
 
     def _update_water(self, data):
-        uptake = _calc_water_uptake(data, self.q_dis, self.q_chg)
-        y = self.m_dry + uptake          # absolute sample mass starting at dry weight
+        absorbed = np.array(data.get("water_absorbed_g", []), dtype=float)
+        released = np.array(data.get("water_released_g", []), dtype=float)
+        n = len(data["ts"])
+
+        if absorbed.size == n and not np.all(np.isnan(absorbed)):
+            net = np.nan_to_num(absorbed) - np.nan_to_num(released)
+            uptake = net
+            peak_net = float(np.nanmax(net)) if net.size > 0 else 0.0
+            self._csv_peak_absorbed = peak_net if peak_net > 0 else float("nan")
+        else:
+            uptake = _calc_water_uptake(data, self.q_dis, self.q_chg)
+            self._csv_peak_absorbed = float("nan")
+
+        y = self.m_dry + uptake
         self._y_water = y
         self.ln_water.set_data(data["ts"], y)
         self._h_baseline.set_ydata([self.m_dry, self.m_dry])
         self.ax_w.set_ylabel("Sample\nmass (g)", color="#ccc", fontsize=7)
         self.ax_w.relim()
         self.ax_w.autoscale_view(scalex=False)
+        self._update_gravimetric_stats()
 
     # ── load / update ─────────────────────────────────────────────────────────
 
@@ -393,7 +414,6 @@ class Viewer:
             self.m_dry = float(val)
             self._session_weights[self.current] = (self.m_dry, self.m_wet, self.m_post_dry)
             self._update_water(self._get_data(self.current))
-            self._update_gravimetric_stats()
             self.fig.canvas.draw_idle()
         except ValueError:
             pass
@@ -416,16 +436,21 @@ class Viewer:
 
     def _update_gravimetric_stats(self):
         dry, wet, post = self.m_dry, self.m_wet, self.m_post_dry
-        if dry <= 0 or wet <= dry:
-            self._stats_text.set_text("")
-            self.fig.canvas.draw_idle()
-            return
-        uptake = wet - dry
-        lines  = [f"Uptake   {uptake:.3f} g  ({uptake/dry*100:.1f}% w/w)"]
-        if 0 < post < wet:
-            released = wet - post
-            lines.append(f"Released {released:.3f} g  ({released/dry*100:.1f}% w/w)")
-            lines.append(f"Regen    {released/uptake*100:.1f}%")
+        csv_peak = self._csv_peak_absorbed
+        lines = []
+
+        if dry > 0 and not np.isnan(csv_peak) and csv_peak > 0:
+            pred_wet = dry + csv_peak
+            lines.append(f"Pred wet  {pred_wet:.3f} g  ({csv_peak/dry*100:.1f}% w/w)")
+
+        if dry > 0 and wet > dry:
+            uptake = wet - dry
+            lines.append(f"Meas uptake {uptake:.3f} g  ({uptake/dry*100:.1f}% w/w)")
+            if 0 < post < wet:
+                released = wet - post
+                lines.append(f"Released {released:.3f} g  ({released/dry*100:.1f}% w/w)")
+                lines.append(f"Regen    {released/uptake*100:.1f}%")
+
         self._stats_text.set_text("\n".join(lines))
         self.fig.canvas.draw_idle()
 

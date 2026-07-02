@@ -8,3 +8,7 @@
 build/
 dist/
 *.spec.bak
+
+# Data logs
+DATA/
+*.csv
