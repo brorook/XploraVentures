@@ -29,7 +29,6 @@ class CycleRunner:
             "phase": "idle", "cycle": 0, "total": 0,
             "elapsed_s": 0, "delta_t_live": 0.0, "delta_h_live": 0.0, "params": {},
             "mass_flux_g_min": 0.0, "water_absorbed_g": 0.0, "water_released_g": 0.0,
-            "regen_energy_wh": 0.0,
         }
         self.last_t1 = None
         self.last_t3 = None
@@ -39,7 +38,7 @@ class CycleRunner:
         self.last_heater = False
         self._paused_phase = None
         self._current_charge_sp = 0.0
-        self._regen_end_dh = 1.0
+        self._regen_duration_min = 30.0
         self._num_cycles = 0
         self._discharge_dh = 0.0
         self._cooldown_dt = 0.0
@@ -48,33 +47,28 @@ class CycleRunner:
         self._post_dry_weight_g = None
         self._flow_discharge = None
         self._flow_charge = None
-        self._heater_voltage = None
-        self._heater_current = None
 
-    def start(self, charge_sp: float, regen_end_dh: float, num_cycles: int,
+    def start(self, charge_sp: float, regen_duration_min: float, num_cycles: int,
               discharge_dh: float = 1.5, cooldown_dt: float = 2.0,
               min_discharge_s: int = 600,
               dry_weight: float = None, flow_discharge: float = None, flow_charge: float = None,
-              heater_voltage: float = None, heater_current: float = None,
               start_phase: str = "discharging"):
         if self._thread and self._thread.is_alive():
             return False, "already running"
-        self._current_charge_sp = charge_sp
-        self._regen_end_dh      = regen_end_dh
+        self._current_charge_sp  = charge_sp
+        self._regen_duration_min = regen_duration_min
         self._num_cycles        = num_cycles
         self._discharge_dh      = discharge_dh
         self._cooldown_dt       = cooldown_dt
         self._dry_weight        = dry_weight
         self._flow_discharge    = flow_discharge
         self._flow_charge       = flow_charge
-        self._heater_voltage    = heater_voltage
-        self._heater_current    = heater_current
         self._min_discharge_s   = min_discharge_s
         self._stop_evt.clear()
         self._pause_evt.clear()
         self._thread = threading.Thread(
             target=self._run,
-            kwargs=dict(charge_sp=charge_sp, regen_end_dh=regen_end_dh, num_cycles=num_cycles,
+            kwargs=dict(charge_sp=charge_sp, regen_duration_min=regen_duration_min, num_cycles=num_cycles,
                         discharge_dh=discharge_dh, cooldown_dt=cooldown_dt,
                         min_discharge_s=min_discharge_s, start_phase=start_phase),
             daemon=True,
@@ -118,15 +112,15 @@ class CycleRunner:
         self._pause_evt.clear()
         self._emit()
 
-    def update_params(self, charge_sp=None, regen_end_dh=None, num_cycles=None,
+    def update_params(self, charge_sp=None, regen_duration_min=None, num_cycles=None,
                       discharge_dh=None, cooldown_dt=None,
                       wet_weight_g=None, post_dry_weight_g=None):
         if charge_sp is not None:
             self._current_charge_sp = float(charge_sp)
             if self._status["phase"] == "regenerating":
                 self._send({"cmd": "set_sp", "val": self._current_charge_sp})
-        if regen_end_dh is not None:
-            self._regen_end_dh = float(regen_end_dh)
+        if regen_duration_min is not None:
+            self._regen_duration_min = float(regen_duration_min)
         if num_cycles is not None:
             self._num_cycles = max(1, int(num_cycles))
             with self._lock:
@@ -141,10 +135,10 @@ class CycleRunner:
             self._post_dry_weight_g = float(post_dry_weight_g)
         with self._lock:
             self._status["params"] = {
-                "charge_sp":    self._current_charge_sp,
-                "regen_end_dh": self._regen_end_dh,
-                "discharge_dh": self._discharge_dh,
-                "cooldown_dt":  self._cooldown_dt,
+                "charge_sp":         self._current_charge_sp,
+                "regen_duration_min": self._regen_duration_min,
+                "discharge_dh":      self._discharge_dh,
+                "cooldown_dt":       self._cooldown_dt,
             }
         self._emit()
 
@@ -174,12 +168,12 @@ class CycleRunner:
             time.sleep(0.2)
         return time.monotonic() - t0
 
-    def _run(self, charge_sp, regen_end_dh, num_cycles, discharge_dh, cooldown_dt, min_discharge_s=600, start_phase="discharging"):
+    def _run(self, charge_sp, regen_duration_min, num_cycles, discharge_dh, cooldown_dt, min_discharge_s=600, start_phase="discharging"):
         with self._lock:
             self._status.update({
                 "total": num_cycles, "elapsed_s": 0,
                 "delta_t_live": 0.0, "delta_h_live": 0.0,
-                "params": {"charge_sp": self._current_charge_sp, "regen_end_dh": self._regen_end_dh,
+                "params": {"charge_sp": self._current_charge_sp, "regen_duration_min": self._regen_duration_min,
                            "discharge_dh": self._discharge_dh, "cooldown_dt": self._cooldown_dt},
             })
 
@@ -233,7 +227,7 @@ class CycleRunner:
                     break
 
             # REGENERATION ────────────────────────────────────────────────────
-            # Ends when RTD >= charge_sp AND outlet-inlet AH delta <= regen_end_dh
+            # Ends after regen_duration_min minutes
             if not (n == 1 and start_phase == "cooling"):
                 self._set_phase("regenerating", n)
                 with self._lock:
@@ -245,8 +239,6 @@ class CycleRunner:
                 self._send({"cmd": "set_sp",    "val": self._current_charge_sp})
                 t_regen = time.monotonic()
                 pause_offset = 0.0
-                with self._lock:
-                    self._status["regen_energy_wh"] = 0.0
                 while not self._stop_evt.is_set():
                     t1, h1 = self.last_t1, self.last_h1
                     t3, h3 = self.last_t3, self.last_h3
@@ -268,12 +260,8 @@ class CycleRunner:
                     with self._lock:
                         self._status["elapsed_s"]    = elapsed
                         self._status["delta_h_live"] = delta_h
-                    # Accumulate heater energy: sample is 2 s; only count when heater is actually ON
-                    if self._heater_voltage and self._heater_current and self.last_heater:
-                        with self._lock:
-                            self._status["regen_energy_wh"] += self._heater_voltage * self._heater_current * 2.0 / 3600.0
                     self._emit()
-                    if have_all and rtd is not None and rtd >= self._current_charge_sp and delta_h <= self._regen_end_dh:
+                    if elapsed >= self._regen_duration_min * 60:
                         break
                     if elapsed > 21600:  # 6-hour safety timeout
                         break
@@ -291,6 +279,8 @@ class CycleRunner:
             self._send({"cmd": "solenoid",  "on": False})
             self._send({"cmd": "solenoid2", "on": True})
             self._send({"cmd": "set_sp",    "val": 0})
+            t_cool = time.monotonic()
+            pause_offset_cool = 0.0
             while not self._stop_evt.is_set():
                 t1  = self.last_t1
                 rtd = self.last_rtd
@@ -300,7 +290,9 @@ class CycleRunner:
                 self._emit()
                 if t1 is not None and rtd is not None and rtd <= t1 + self._cooldown_dt:
                     break
-                self._tick()
+                if time.monotonic() - t_cool - pause_offset_cool > 21600:  # 6-hour safety timeout
+                    break
+                pause_offset_cool += self._tick()
 
             if self._stop_evt.is_set():
                 break

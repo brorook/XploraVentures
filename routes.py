@@ -71,8 +71,8 @@ def create_blueprint(
     def api_cycle_start():
         body = request.json or {}
         params = {
-            "charge_sp":      float(body.get("charge_sp",    120)),
-            "regen_end_dh":   float(body.get("regen_end_dh",  1.0)),
+            "charge_sp":         float(body.get("charge_sp",         120)),
+            "regen_duration_min": float(body.get("regen_duration_min", 30)),
             "num_cycles":     int(body.get("num_cycles",        1)),
             "discharge_dh":   float(body.get("discharge_dh",    1.5)),
             "cooldown_dt":    float(body.get("cooldown_dt",    2.0)),
@@ -81,8 +81,6 @@ def create_blueprint(
             "dry_weight":      float(body["dry_weight"])      if body.get("dry_weight")      else None,
             "flow_discharge":  float(body["flow_discharge"])  if body.get("flow_discharge")  else None,
             "flow_charge":     float(body["flow_charge"])     if body.get("flow_charge")     else None,
-            "heater_voltage":  float(body["heater_voltage"])  if body.get("heater_voltage")  else None,
-            "heater_current":  float(body["heater_current"])  if body.get("heater_current")  else None,
         }
         if db:
             run_id_holder["id"] = db.start_cycle_run(params)
@@ -98,8 +96,8 @@ def create_blueprint(
     def api_cycle_update():
         body = request.json or {}
         params = {}
-        if "charge_sp"         in body: params["charge_sp"]         = float(body["charge_sp"])
-        if "regen_end_dh"      in body: params["regen_end_dh"]      = float(body["regen_end_dh"])
+        if "charge_sp"          in body: params["charge_sp"]          = float(body["charge_sp"])
+        if "regen_duration_min" in body: params["regen_duration_min"] = float(body["regen_duration_min"])
         if "num_cycles"        in body: params["num_cycles"]         = int(body["num_cycles"])
         if "discharge_dh"      in body: params["discharge_dh"]      = float(body["discharge_dh"])
         if "cooldown_dt"       in body: params["cooldown_dt"]        = float(body["cooldown_dt"])

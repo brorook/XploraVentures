@@ -44,7 +44,7 @@ def _schedule_shutdown():
     def _do_shutdown():
         os._exit(0)
     with _shutdown_timer_lock:
-        _shutdown_timer = threading.Timer(3.0, _do_shutdown)
+        _shutdown_timer = threading.Timer(30.0, _do_shutdown)
         _shutdown_timer.daemon = True
         _shutdown_timer.start()
 
@@ -68,7 +68,7 @@ def on_disconnect():
     with _shutdown_timer_lock:
         _client_count = max(0, _client_count - 1)
         remaining = _client_count
-    if remaining == 0:
+    if remaining == 0 and cycle_runner.get_status()["phase"] in ("idle", "done", "stopped"):
         _schedule_shutdown()
 
 # ─── Subsystems ───────────────────────────────────────────────────────────────
@@ -126,7 +126,6 @@ def _on_telemetry(data: dict):
     enriched["_mass_flux_g_min"]  = status.get("mass_flux_g_min", "")
     enriched["_water_absorbed_g"] = status.get("water_absorbed_g", "")
     enriched["_water_released_g"] = status.get("water_released_g", "")
-    enriched["_regen_energy_wh"]  = status.get("regen_energy_wh", "")
     t1 = data.get("sht1", {}).get("t"); h1 = data.get("sht1", {}).get("h")
     t3 = data.get("sht3", {}).get("t"); h3 = data.get("sht3", {}).get("h")
     if t1 is not None and h1 is not None:

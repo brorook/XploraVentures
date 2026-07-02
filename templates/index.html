@@ -243,8 +243,8 @@
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Regen end ΔAH (g/m³)</div>
-        <input type="number" id="cpRegenEndDH" value="1.0" step="0.1" min="0.1"
+        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Regen time (min)</div>
+        <input type="number" id="cpRegenTime" value="30" step="1" min="1"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpSyncFromInputs()">
       </div>
       <div>
@@ -277,16 +277,6 @@
         <input type="number" id="cpWetWeight" placeholder="after discharge" step="0.001" min="0"
           style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box" oninput="cpUpdateGravimetric()">
       </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Heater voltage (V)</div>
-        <input type="number" id="cpHeaterV" value="24" step="0.1" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
-      </div>
-      <div>
-        <div style="font-size:0.72rem;color:#9ba3af;margin-bottom:3px">Heater current (A)</div>
-        <input type="number" id="cpHeaterA" value="1.7" step="0.01" min="0"
-          style="background:#252836;border:1px solid #3a3d4a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:0.85rem;width:100%;box-sizing:border-box">
-      </div>
     </div>
 
     <!-- Action + live status row -->
@@ -309,7 +299,7 @@
       </div>
       <div id="cpSoakBar" style="display:none;flex:1;min-width:140px">
         <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#9ba3af;margin-bottom:3px">
-          <span>At temp</span><span id="cpSoakLabel">0m</span>
+          <span>Regen time</span><span id="cpSoakLabel">0m</span>
         </div>
         <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:3px;height:6px;overflow:hidden">
           <div id="cpSoakFill" style="background:#ef4444;height:100%;width:0%;transition:width .9s linear"></div>
@@ -329,10 +319,6 @@
       <span id="cpWaterLabel">Absorbed</span>: <span id="cpWaterVal">--</span> g
       <span id="cpWaterPct" style="color:#6b7280"></span>
       <span id="cpRegenEff" style="color:#34d399"></span>
-    </div>
-    <div id="cpEnergy" style="display:none;font-size:0.82rem;color:#fb923c;margin-top:4px">
-      Heater: <span id="cpPowerW">--</span> W &nbsp;|&nbsp;
-      Energy (regen): <span id="cpEnergyWh">--</span> Wh &nbsp;(<span id="cpEnergyKJ">--</span> kJ)
     </div>
     <div id="cpGravimetric" style="display:none;font-size:0.82rem;color:#fbbf24;margin-top:6px"></div>
     <div id="cpLogFile" style="display:none;font-size:0.75rem;color:#6b7280;margin-top:8px">
@@ -642,7 +628,7 @@ const CP_MAP    = { regenerating: "Heat", cooling: "Cool", discharging: "Soak" }
 
 const cp = {
   cvs: document.getElementById('cycleCanvas'),
-  p: { charge_sp: 120, regen_end_dh: 1.0, discharge_dh: 1.5, cooldown_dt: 2.0 },
+  p: { charge_sp: 120, regen_duration_min: 30, discharge_dh: 1.5, cooldown_dt: 2.0 },
   drag: null, dragRange: null,
 };
 cp.ctx = cp.cvs.getContext('2d');
@@ -684,7 +670,7 @@ function cpDraw() {
   // Phase labels
   c.font='10px Segoe UI'; c.textAlign='center'; c.textBaseline='top'; c.fillStyle='#6b7280';
   c.fillText('DISCHARGE',                       (chargeX+cooldownX)/2,    CPL.t+5);
-  c.fillText(`REGEN  ΔAH≤${p.regen_end_dh}g`,    (cooldownX+dischargeX)/2, CPL.t+5);
+  c.fillText(`REGEN  ${p.regen_duration_min}min`,    (cooldownX+dischargeX)/2, CPL.t+5);
   c.fillText('COOLDOWN',                        (dischargeX+rightX)/2,    CPL.t+5);
 
   // Charge setpoint reference line
@@ -777,17 +763,17 @@ window.addEventListener('mousemove', e => {
 window.addEventListener('mouseup', () => { cp.drag = null; });
 
 function cpSyncToInputs() {
-  document.getElementById('cpRegenTemp').value  = cp.p.charge_sp;
-  document.getElementById('cpRegenEndDH').value  = cp.p.regen_end_dh;
+  document.getElementById('cpRegenTemp').value   = cp.p.charge_sp;
+  document.getElementById('cpRegenTime').value   = cp.p.regen_duration_min;
   document.getElementById('cpDischargeDH').value = cp.p.discharge_dh;
   document.getElementById('cpCooldownDT').value  = cp.p.cooldown_dt;
 }
 
 function cpSyncFromInputs() {
-  cp.p.charge_sp    = parseFloat(document.getElementById('cpRegenTemp').value) || 120;
-  cp.p.regen_end_dh = parseFloat(document.getElementById('cpRegenEndDH').value) || 1.0;
-  cp.p.discharge_dh = parseFloat(document.getElementById('cpDischargeDH').value) || 1.5;
-  cp.p.cooldown_dt  = parseFloat(document.getElementById('cpCooldownDT').value)  || 2.0;
+  cp.p.charge_sp          = parseFloat(document.getElementById('cpRegenTemp').value)   || 120;
+  cp.p.regen_duration_min = parseFloat(document.getElementById('cpRegenTime').value)   || 30;
+  cp.p.discharge_dh       = parseFloat(document.getElementById('cpDischargeDH').value) || 1.5;
+  cp.p.cooldown_dt        = parseFloat(document.getElementById('cpCooldownDT').value)  || 2.0;
   cpDraw();
 }
 
@@ -804,19 +790,29 @@ socket.on("cycle_status", d => {
     el.style.boxShadow   = active ? `0 0 10px ${CP_COLORS[n]}55` : "none";
   });
 
-  document.getElementById("cpSoakBar").style.display = "none";
-
-  const dtEl = document.getElementById("cpDischargeDT");
+  const dtEl    = document.getElementById("cpDischargeDT");
+  const soakBar = document.getElementById("cpSoakBar");
   if (d.phase === "discharging") {
+    soakBar.style.display = "none";
     dtEl.style.display = "";
     dtEl.textContent   = `ΔAH = ${(d.delta_h_live ?? 0).toFixed(2)} g/m³`;
   } else if (d.phase === "regenerating") {
-    dtEl.style.display = "";
-    dtEl.textContent   = `ΔAH = ${(d.delta_h_live ?? 0).toFixed(2)} g/m³`;
+    const elapsed  = d.elapsed_s ?? 0;
+    const totalMin = d.params?.regen_duration_min ?? 30;
+    const pct      = Math.min(100, (elapsed / (totalMin * 60)) * 100);
+    const em = Math.floor(elapsed / 60), es = elapsed % 60;
+    soakBar.style.display = "";
+    document.getElementById("cpSoakLabel").textContent = `${em}m ${String(es).padStart(2,'0')}s / ${totalMin}min`;
+    document.getElementById("cpSoakFill").style.width  = pct + "%";
+    dtEl.style.display = "none";
   } else if (d.phase === "cooling") {
+    soakBar.style.display = "none";
     dtEl.style.display = "";
     dtEl.textContent   = `ΔT = ${(d.delta_t_live ?? 0).toFixed(1)} °C`;
-  } else { dtEl.style.display = "none"; }
+  } else {
+    soakBar.style.display = "none";
+    dtEl.style.display = "none";
+  }
 
   const pauseBtn  = document.getElementById("cpPauseBtn");
   const paused    = d.phase === "paused";
@@ -872,35 +868,18 @@ socket.on("cycle_status", d => {
     massFluxEl.style.display = "none";
   }
 
-  const energyEl = document.getElementById("cpEnergy");
-  const heaterV  = parseFloat(document.getElementById("cpHeaterV").value);
-  const heaterA  = parseFloat(document.getElementById("cpHeaterA").value);
-  if (d.phase === "regenerating" && !isNaN(heaterV) && !isNaN(heaterA)) {
-    energyEl.style.display = "";
-    const powerW   = heaterV * heaterA;
-    const energyWh = d.regen_energy_wh ?? 0;
-    document.getElementById("cpPowerW").textContent  = powerW.toFixed(1);
-    document.getElementById("cpEnergyWh").textContent = energyWh.toFixed(3);
-    document.getElementById("cpEnergyKJ").textContent = (energyWh * 3.6).toFixed(2);
-  } else {
-    energyEl.style.display = "none";
-  }
 });
 
 async function cycleStart() {
-  const heaterV = parseFloat(document.getElementById("cpHeaterV").value);
-  const heaterA = parseFloat(document.getElementById("cpHeaterA").value);
   const body = {
-    charge_sp:      cp.p.charge_sp,
-    regen_end_dh:   cp.p.regen_end_dh,
+    charge_sp:          cp.p.charge_sp,
+    regen_duration_min: cp.p.regen_duration_min,
     num_cycles:     parseInt(document.getElementById("cpCycles").value),
     discharge_dh:   cp.p.discharge_dh,
     cooldown_dt:    cp.p.cooldown_dt,
     dry_weight:     parseFloat(document.getElementById("cpDryWeight").value)  || null,
     min_discharge_s:  (parseFloat(document.getElementById("cpMinDischarge").value) || 10) * 60,
     start_phase:      document.getElementById("cpStartPhase").value,
-    heater_voltage:   isNaN(heaterV) ? null : heaterV,
-    heater_current:   isNaN(heaterA) ? null : heaterA,
   };
   const r = await fetch("/api/cycle/start", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
   const d = await r.json();
@@ -917,8 +896,8 @@ async function cycleStop() {
 
 async function cycleUpdate() {
   const body = {
-    charge_sp:    cp.p.charge_sp,
-    regen_end_dh: cp.p.regen_end_dh,
+    charge_sp:          cp.p.charge_sp,
+    regen_duration_min: cp.p.regen_duration_min,
     num_cycles:   parseInt(document.getElementById("cpCycles").value),
     discharge_dh: cp.p.discharge_dh,
     cooldown_dt:  cp.p.cooldown_dt,
